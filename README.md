@@ -2,6 +2,8 @@
 
 Type a tracking number and see where the parcel is: label created, picked up, in transit, out for delivery, delivered. It also warns when a parcel stops moving ("No movement for 5 days") or runs late, and shows the full scan history.
 
+**Live app:** https://gasserlol.github.io/parcel-tracker/ (open it on an iPhone in Safari, then Share → Add to Home Screen)
+
 Right now it runs on sample data. Real DHL results switch on when you add a free DHL key (see below).
 
 ## Try it
