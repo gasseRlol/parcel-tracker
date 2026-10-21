@@ -28,7 +28,7 @@ const TYPES = {
   ".png": "image/png",
 };
 // Only these files are served; everything else (server.js, .env, Firebase settings) stays private.
-const PUBLIC = /^\/(index\.html|lookup\.html|app\.js|globe\.js|firebase-config\.js|manifest\.webmanifest|icons\/[a-z0-9-]+\.png)$/;
+const PUBLIC = /^\/(index\.html|lookup\.html|app\.js|globe\.js|backend-(?:firebase|demo)\.js|firebase-config\.js|manifest\.webmanifest|icons\/[a-z0-9-]+\.png)$/;
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
   res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });

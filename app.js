@@ -1,16 +1,6 @@
 // Parcel Tracker: accounts, your deliveries as tabs, the courier's checklist, and live tracking
-// of the courier's phone on a spinning Earth. Data lives in Firebase (see firestore.rules).
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import {
-  getAuth, connectAuthEmulator, onAuthStateChanged, createUserWithEmailAndPassword,
-  signInWithEmailAndPassword, sendPasswordResetEmail, signOut, updateProfile,
-} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import {
-  initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager,
-  memoryLocalCache, doc, getDoc, setDoc, updateDoc, collection, query, where, onSnapshot,
-  serverTimestamp, arrayUnion, writeBatch, runTransaction,
-} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
-import { firebaseConfig, useEmulators } from './firebase-config.js';
+// of the courier's phone on a spinning Earth. Data lives in Firebase (backend-firebase.js),
+// or in the browser for the demo (backend-demo.js); both offer the same functions.
 import { createGlobe } from './globe.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -21,19 +11,20 @@ const store = {
 };
 const SEC = 1000, MIN = 60 * SEC;
 
-// ---------- Firebase ----------
-const fb = initializeApp(firebaseConfig);
-const auth = getAuth(fb);
-const db = initializeFirestore(fb, {
-  localCache: useEmulators ? memoryLocalCache() : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-});
-if (useEmulators) {
-  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+// ---------- Live or demo ----------
+// ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
+if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
+const B = store.get('pt.demo', false) ? await import('./backend-demo.js') : await import('./backend-firebase.js');
+const DEMO = B.kind === 'demo';
+if (B.testMode) $('#testBanner').hidden = false;
+if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
+$('#demoBtn').addEventListener('click', () => { store.set('pt.demo', true); location.href = `${location.pathname}?demo`; });
+if (DEMO) {
+  $('#testBanner').textContent = 'Demo · everything stays on this device';
   $('#testBanner').hidden = false;
-  queueMicrotask(() => { window.__pt = { globe, S }; }); // handle for poking at the app while testing locally
+  document.querySelector('[data-menu="signout"] span').textContent = 'Leave the demo';
+  $('[data-menu="reset-demo"]').hidden = false;
 }
-const deliveryRef = code => doc(db, 'deliveries', code);
 
 // ---------- Words ----------
 const STATUS = {
@@ -182,8 +173,8 @@ const AUTH_ERRORS = {
   'auth/user-not-found': 'Email or password is wrong.',
   'auth/too-many-requests': 'Too many tries. Wait a minute, then try again.',
   'auth/network-request-failed': 'No connection. Check your internet and try again.',
-  'auth/operation-not-allowed': "Email sign-in isn't switched on for this app yet.",
-  'auth/configuration-not-found': "Email sign-in isn't switched on for this app yet.",
+  'auth/operation-not-allowed': "Accounts aren't open yet. Tap \"Try the demo\" above to test everything now.",
+  'auth/configuration-not-found': "Accounts aren't open yet. Tap \"Try the demo\" above to test everything now.",
 };
 const authMessage = e => AUTH_ERRORS[e && e.code] || 'Something went wrong. Try again in a moment.';
 function showError(id, text) { const el = $(id); el.textContent = text; el.hidden = !text; }
@@ -201,7 +192,7 @@ $('#signInForm').addEventListener('submit', async e => {
   const btn = e.submitter || $('#signInForm button[type=submit]');
   btn.disabled = true;
   try {
-    await signInWithEmailAndPassword(auth, $('#inEmail').value.trim(), $('#inPassword').value);
+    await B.signIn($('#inEmail').value.trim(), $('#inPassword').value);
   } catch (err) {
     showError('#inError', authMessage(err));
   } finally { btn.disabled = false; }
@@ -216,8 +207,7 @@ $('#signUpForm').addEventListener('submit', async e => {
   btn.disabled = true;
   pendingProfile = { name, phone: $('#upPhone').value.trim().slice(0, 30), role };
   try {
-    const cred = await createUserWithEmailAndPassword(auth, $('#upEmail').value.trim(), $('#upPassword').value);
-    await updateProfile(cred.user, { displayName: name }).catch(() => {});
+    await B.signUp($('#upEmail').value.trim(), $('#upPassword').value, name);
   } catch (err) {
     pendingProfile = null;
     showError('#upError', authMessage(err));
@@ -228,26 +218,25 @@ $('#forgotBtn').addEventListener('click', async () => {
   const email = $('#inEmail').value.trim();
   if (!email) return showError('#inError', 'Type your email above first, then tap "Forgot your password?" again.');
   try {
-    await sendPasswordResetEmail(auth, email);
+    await B.resetPassword(email);
     showError('#inError', '');
     toast('If there is an account for that email, a reset link is on its way.');
   } catch (err) { showError('#inError', authMessage(err)); }
 });
 
 async function loadProfile(user) {
-  const ref = doc(db, 'users', user.uid);
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) return snap.data();
+    const existing = await B.getProfile(user.uid);
+    if (existing) return existing;
   } catch {}
   const profile = pendingProfile || { name: user.displayName || (user.email || 'You').split('@')[0], phone: '', role: 'customer' };
   pendingProfile = null;
-  const data = { name: profile.name.slice(0, 60) || 'You', phone: profile.phone || '', role: profile.role, createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
-  try { await setDoc(ref, data); } catch {}
+  const data = { name: profile.name.slice(0, 60) || 'You', phone: profile.phone || '', role: profile.role, createdAt: B.now(), updatedAt: B.now() };
+  try { await B.saveProfile(user.uid, data); } catch {}
   return data;
 }
 
-onAuthStateChanged(auth, async user => {
+B.onAuth(async user => {
   $('#boot').hidden = true;
   endSession();
   S.user = user;
@@ -287,13 +276,12 @@ function endSession() {
 // ---------- Data ----------
 function subscribe() {
   const uid = S.user.uid;
-  const col = collection(db, 'deliveries');
-  const toMap = snap => { const m = new Map(); snap.forEach(d => m.set(d.id, { code: d.id, ...d.data() })); return m; };
+  const toMap = list => new Map(list.map(d => [d.code, d]));
   const fail = () => toast("Couldn't load your deliveries. Check your connection.");
-  S.unsubs.push(onSnapshot(query(col, where('ownerUid', '==', uid)), snap => { S.mine = toMap(snap); onData('mine'); }, fail));
-  S.unsubs.push(onSnapshot(query(col, where('courierUid', '==', uid)), snap => {
+  S.unsubs.push(B.watch('ownerUid', uid, list => { S.mine = toMap(list); onData('mine'); }, fail));
+  S.unsubs.push(B.watch('courierUid', uid, list => {
     const before = S.jobs;
-    S.jobs = toMap(snap);
+    S.jobs = toMap(list);
     if (S.loaded.jobs) for (const [code, d] of before) if (!S.jobs.has(code) && !S.mine.has(code)) alertUser(`${d.item}: the customer took you off this delivery`);
     onData('jobs');
   }, fail));
@@ -314,8 +302,7 @@ function onData(which) {
   }
   if (which === (S.mode === 'customer' ? 'mine' : 'jobs')) {
     if (first && !S.selected) {
-      const remembered = store.get(`pt.sel.${S.user.uid}.${S.mode}`, null);
-      const pick = (remembered && map.has(remembered) && remembered) || (sortedList()[0] && !FINISHED.has(sortedList()[0].status) ? sortedList()[0].code : null);
+      const pick = defaultPick();
       if (pick) { select({ kind: 'delivery', code: pick }, { spin: true }); return; }
     }
     // A link like #d/CODE was opened before the data arrived: fly there now
@@ -360,9 +347,19 @@ function setMode(mode) {
   S.mode = mode;
   store.set(`pt.mode.${S.user.uid}`, mode);
   renderChrome();
-  const remembered = store.get(`pt.sel.${S.user.uid}.${mode}`, null);
-  const map = mode === 'customer' ? S.mine : S.jobs;
-  select(remembered && map.has(remembered) ? { kind: 'delivery', code: remembered } : null, { spin: true });
+  const pick = defaultPick();
+  select(pick ? { kind: 'delivery', code: pick } : null, { spin: true });
+}
+
+// What to open first: the last one you looked at, else one on its way, else the newest unfinished one
+function defaultPick() {
+  const map = S.mode === 'customer' ? S.mine : S.jobs;
+  const remembered = store.get(`pt.sel.${S.user.uid}.${S.mode}`, null);
+  if (remembered && map.has(remembered) && !S.pendingDelete.has(remembered)) return remembered;
+  const list = sortedList();
+  const moving = list.find(d => d.status === 'on_the_way');
+  if (moving) return moving.code;
+  return list[0] && !FINISHED.has(list[0].status) ? list[0].code : null;
 }
 
 // ---------- Rendering: chrome and tabs ----------
@@ -542,6 +539,7 @@ function customerHtml(d) {
         <div class="code" aria-label="Delivery code ${esc(d.code.split('').join(' '))}">${esc(d.code)}</div>
         <div class="actions"><button class="btn btn-primary" type="button" data-act="share-code">${ICON.share}Share link</button><button class="btn" type="button" data-act="copy-code">${ICON.copy}Copy code</button></div>
         <p class="small muted">They open the link, sign in as a courier, and take the job. Then you can watch them on the map.</p>
+        ${DEMO ? `<p class="small" style="color: var(--sky)">Demo: be the courier yourself. Switch to <strong>Courier</strong> at the top, tap <strong>Take a job</strong> and type <span class="mono">${esc(d.code)}</span>.</p>` : ''}
       </div>`;
   const pinCard = !finished ? `<div class="card">
       <p class="label">Delivery PIN</p>
@@ -610,7 +608,9 @@ function courierHtml(d) {
 
   const shareBlock = shareHtml(d);
 
+  const demoPin = DEMO && B.peekPin(d.code);
   const pinForm = `<form class="act" data-form="pin" novalidate>
+      ${demoPin ? `<p class="small" style="color: var(--sky)">Demo: the customer's PIN is <span class="mono">${esc(demoPin)}</span>.</p>` : ''}
       <div class="field"><label for="pinInput">Customer's 4-digit PIN</label><input id="pinInput" class="mono" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" placeholder="0000" style="font-size: 22px; letter-spacing: .4em"></div>
       ${S.ui.pinError ? `<p class="error" id="pinError" role="alert">${esc(S.ui.pinError)}</p>` : ''}
       <button class="btn btn-ok" type="submit">${ICON.check}Confirm delivery</button>
@@ -858,7 +858,7 @@ async function submitForm() {
   const fields = { item: f.item.slice(0, 80), from: f.from.slice(0, 80), address: f.address.slice(0, 160), notes: f.notes.slice(0, 300), ownerPhone: f.phone.slice(0, 30), dest: f.dest, destLabel: (f.destLabel || '').slice(0, 160) };
   if (S.selected.kind === 'edit') {
     try {
-      await updateDoc(deliveryRef(f.code), { ...fields, updatedAt: serverTimestamp() });
+      await B.update(f.code, { ...fields, updatedAt: B.now() });
       toast('Saved');
       S.draft = null;
       select({ kind: 'delivery', code: f.code }, { spin: true });
@@ -868,17 +868,15 @@ async function submitForm() {
   for (let attempt = 0; attempt < 3; attempt++) {
     const code = randomCode();
     const pin = randomPin();
-    const batch = writeBatch(db);
-    batch.set(deliveryRef(code), {
+    const data = {
       ...fields,
       ownerUid: S.user.uid, ownerName: S.profile.name,
       status: 'waiting', courierUid: null, courierName: '', courierPhone: '', courierLoc: null,
       events: [event('waiting', 'customer')],
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'deliveries', code, 'private', 'handoff'), { pin });
+      createdAt: B.now(), updatedAt: B.now(),
+    };
     try {
-      await batch.commit();
+      await B.create(code, data, pin);
       S.pins.set(code, pin);
       S.draft = null;
       toast('Added. Send the code to whoever is delivering it.');
@@ -895,28 +893,20 @@ async function loadPin(code) {
   if (S.pins.has(code)) return;
   S.pins.set(code, null);
   try {
-    const snap = await getDoc(doc(db, 'deliveries', code, 'private', 'handoff'));
-    if (snap.exists()) { S.pins.set(code, snap.data().pin); refreshPanel(); }
+    const pin = await B.getPin(code);
+    if (pin) { S.pins.set(code, pin); refreshPanel(); }
   } catch { S.pins.delete(code); }
 }
 
 async function setStatus(d, status, by, extra = {}, kind) {
-  await updateDoc(deliveryRef(d.code), {
-    status,
-    events: arrayUnion(event(status, by, kind ? { kind } : {})),
-    updatedAt: serverTimestamp(),
-    ...extra,
-  });
+  await B.update(d.code, { status, updatedAt: B.now(), ...extra }, event(status, by, kind ? { kind } : {}));
 }
 
 function deleteWithUndo(d) {
   const t = { data: d, timer: 0 };
   t.timer = setTimeout(async () => {
     S.pendingDelete.delete(d.code);
-    const batch = writeBatch(db);
-    batch.delete(doc(db, 'deliveries', d.code, 'private', 'handoff'));
-    batch.delete(deliveryRef(d.code));
-    try { await batch.commit(); } catch { toast(`Couldn't delete ${d.item}.`); renderTabs(); }
+    try { await B.remove(d.code); } catch { toast(`Couldn't delete ${d.item}.`); renderTabs(); }
   }, 6500);
   S.pendingDelete.set(d.code, t);
   select(null, { spin: true });
@@ -932,9 +922,7 @@ async function findJob(raw) {
   if (mine) { select({ kind: 'delivery', code }, { spin: true }); return; }
   S.join.busy = true; renderPanel();
   try {
-    const snap = await getDoc(deliveryRef(code));
-    if (!snap.exists()) throw new Error('missing');
-    const p = { code, ...snap.data() };
+    const p = await B.getJob(code);
     if (p.courierUid && p.courierUid !== S.user.uid) throw new Error('taken');
     if (FINISHED.has(p.status)) S.join.error = 'This delivery is already finished.';
     else S.join.preview = p;
@@ -950,10 +938,10 @@ async function claimJob() {
   if (!p) return;
   S.join.busy = true; renderPanel();
   try {
-    await updateDoc(deliveryRef(p.code), {
+    await B.update(p.code, {
       courierUid: S.user.uid, courierName: S.profile.name, courierPhone: S.profile.phone || '',
-      status: 'assigned', events: arrayUnion(event('assigned', 'courier')), updatedAt: serverTimestamp(),
-    });
+      status: 'assigned', updatedAt: B.now(),
+    }, event('assigned', 'courier'));
     S.join = { code: '', preview: null, error: '', busy: false };
     toast(`You took the job: ${p.item}`);
     select({ kind: 'delivery', code: p.code }, { spin: true });
@@ -1006,9 +994,9 @@ async function send(sh) {
   if (!p) return;
   sh.lastSent = Date.now();
   try {
-    await updateDoc(deliveryRef(sh.code), {
+    await B.update(sh.code, {
       courierLoc: { lat: p.lat, lng: p.lng, acc: p.acc, heading: p.heading, speed: p.speed, at: p.at },
-      updatedAt: serverTimestamp(),
+      updatedAt: B.now(),
       ...(sh.demo ? { demoDrive: true } : {}),
     });
   } catch {
@@ -1076,7 +1064,7 @@ document.addEventListener('click', async e => {
       case 'search': { const q = $('#fSearch').value.trim(); if (q) searchPlaces(q); return; }
       case 'share-code': return shareCode(d);
       case 'copy-code': return copyText(d.code, 'Code copied');
-      case 'received': return setStatus(d, 'delivered', 'customer', { deliveredAt: serverTimestamp() });
+      case 'received': return setStatus(d, 'delivered', 'customer', { deliveredAt: B.now() });
       case 'cancel': return setStatus(d, 'cancelled', 'customer');
       case 'restore': return setStatus(d, d.courierUid ? 'assigned' : 'waiting', 'customer', {}, 'restored');
       case 'unassign': return setStatus(d, 'waiting', 'customer', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'unassigned');
@@ -1119,13 +1107,7 @@ document.addEventListener('submit', async e => {
     const pin = input.value.replace(/\D/g, '');
     if (pin.length !== 4) { S.ui.pinError = 'The PIN has 4 digits.'; return renderPanel(); }
     try {
-      // A transaction waits for the server's answer, so a wrong PIN never flashes "Delivered"
-      await runTransaction(db, async tx => {
-        const ref = deliveryRef(d.code);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error('gone');
-        tx.update(ref, { status: 'delivered', events: arrayUnion(event('delivered', 'courier')), handoffPin: pin, deliveredAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      });
+      await B.deliver(d.code, { status: 'delivered', handoffPin: pin, deliveredAt: B.now(), updatedAt: B.now() }, event('delivered', 'courier'));
       S.ui.pinError = '';
       stopSharing();
       toast(`Delivered: ${d.item}`);
@@ -1195,7 +1177,14 @@ async function menuAction(what) {
   closeMenu();
   if (what === 'signout') {
     if (S.sharing) stopSharing();
-    return signOut(auth);
+    if (DEMO) { store.set('pt.demo', false); location.href = location.pathname; return; }
+    return B.signOutUser();
+  }
+  if (what === 'reset-demo') {
+    stopSharing();
+    B.reset();
+    location.reload();
+    return;
   }
   if (what === 'profile') {
     $('#pfName').value = S.profile.name || '';
@@ -1217,10 +1206,9 @@ $('#profileForm').addEventListener('submit', async e => {
   const name = $('#pfName').value.trim();
   if (!name) return showError('#pfError', 'Type your name.');
   const role = (document.querySelector('[name=pfRole]:checked') || {}).value || 'customer';
-  const data = { name: name.slice(0, 60), phone: $('#pfPhone').value.trim().slice(0, 30), role, createdAt: S.profile.createdAt || serverTimestamp(), updatedAt: serverTimestamp() };
+  const data = { name: name.slice(0, 60), phone: $('#pfPhone').value.trim().slice(0, 30), role, createdAt: S.profile.createdAt || B.now(), updatedAt: B.now() };
   try {
-    await setDoc(doc(db, 'users', S.user.uid), data);
-    await updateProfile(S.user, { displayName: data.name }).catch(() => {});
+    await B.saveProfile(S.user.uid, data);
     S.profile = data;
     renderChrome();
     $('#profileDialog').close();

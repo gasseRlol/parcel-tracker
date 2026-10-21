@@ -2,7 +2,11 @@
 
 Track your deliveries live on a spinning Earth. Add what you're waiting for, send the code to whoever delivers it, and watch their phone move down your street.
 
+**Try the demo (no account):** https://gasserlol.github.io/parcel-tracker/?demo
+
 **Live app:** https://gasserlol.github.io/parcel-tracker/ (on iPhone: open in Safari, Share → Add to Home Screen)
+
+The demo runs entirely in the browser: sample deliveries in Cairo, a demo courier driving one of them to the door, and a courier job you can finish yourself (its PIN is shown). Nothing leaves the phone, and *Restart the demo* in the account menu puts everything back. Real accounts need **Email/Password** switched on in the Firebase console (Authentication → Sign-in method).
 
 ## How it works
 
@@ -23,6 +27,8 @@ Phones only share location while the app is open, so the courier should keep the
 | `index.html` | Screens and the space theme |
 | `app.js` | Accounts, deliveries, courier panel, live tracking |
 | `globe.js` | The Earth: NASA Blue Marble from space, dark street map up close, the spin and dive |
+| `backend-firebase.js` | Sign-in and data through Firebase |
+| `backend-demo.js` | The same functions kept in the browser, with the sample world and the demo courier |
 | `firebase-config.js` | The Firebase web config (public by design) |
 | `firestore.rules` | Who can read and change what. Deploy with `firebase deploy --only firestore:rules` |
 | `lookup.html` | The older carrier-number lookup (DHL and others, sample data) |

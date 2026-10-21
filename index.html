@@ -285,6 +285,9 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
   <div class="auth-card">
     <h1 class="auth-title" id="authTitle">Parcel <span>Tracker</span></h1>
     <p class="auth-sub">Every delivery on one planet. Watch your courier come down your street.</p>
+    <button class="btn btn-sky btn-wide" type="button" id="demoBtn">Try the demo, no account needed</button>
+    <p class="small muted" style="margin-top: -8px">Sample deliveries in Cairo and a courier driving to your door live. Everything stays on your phone.</p>
+    <p class="label" style="text-align: center">or use your account</p>
     <div class="seg" role="group" aria-label="Sign in or create an account">
       <button type="button" data-auth-tab="in" aria-pressed="true">Sign in</button>
       <button type="button" data-auth-tab="up" aria-pressed="false">Create account</button>
@@ -342,7 +345,8 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
   <button type="button" role="menuitem" data-menu="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>Profile</button>
   <a role="menuitem" href="lookup.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4Z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>Track a carrier number</a>
   <button type="button" role="menuitem" data-menu="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4Z"/><path d="M10 21h4"/></svg><span id="alertsLabel">Turn on alerts</span></button>
-  <button type="button" role="menuitem" data-menu="signout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>Sign out</button>
+  <button type="button" role="menuitem" data-menu="reset-demo" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 4v7h7"/></svg>Restart the demo</button>
+  <button type="button" role="menuitem" data-menu="signout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg><span>Sign out</span></button>
 </div>
 
 <dialog id="profileDialog" aria-labelledby="profileTitle">
