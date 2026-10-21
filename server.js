@@ -23,11 +23,12 @@ const DHL_KEY = process.env.DHL_API_KEY || "";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
   ".webmanifest": "application/manifest+json",
   ".png": "image/png",
 };
-// Only these files are served; everything else (server.js, .env) stays private.
-const PUBLIC = /^\/(index\.html|manifest\.webmanifest|icons\/[a-z0-9-]+\.png)$/;
+// Only these files are served; everything else (server.js, .env, Firebase settings) stays private.
+const PUBLIC = /^\/(index\.html|lookup\.html|app\.js|globe\.js|firebase-config\.js|manifest\.webmanifest|icons\/[a-z0-9-]+\.png)$/;
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
   res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });

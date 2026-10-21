@@ -1,0 +1,83 @@
+rules_version = '2';
+
+// Parcel Tracker
+//  users/{uid}                       a person's profile (only they can see it)
+//  deliveries/{code}                 one delivery; the 8-character code is also the courier's invite code
+//  deliveries/{code}/private/handoff the 4-digit handoff PIN (only the owner can read it)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function text(v, max) { return v is string && v.size() <= max; }
+    function eventsOk() { return request.resource.data.events is list && request.resource.data.events.size() <= 100; }
+
+    match /users/{userId} {
+      allow read, delete: if signedIn() && me() == userId;
+      allow create, update: if signedIn() && me() == userId
+        && request.resource.data.keys().hasOnly(['name', 'phone', 'role', 'createdAt', 'updatedAt'])
+        && text(request.resource.data.name, 60) && request.resource.data.name.size() > 0
+        && text(request.resource.data.phone, 30)
+        && request.resource.data.role in ['customer', 'courier'];
+    }
+
+    match /deliveries/{code} {
+      function isOwner() { return resource.data.ownerUid == me(); }
+      function isCourier() { return resource.data.courierUid == me(); }
+      function handoffPin() { return get(/databases/$(database)/documents/deliveries/$(code)/private/handoff).data.pin; }
+
+      // Anyone signed in who knows the code can preview a job that has no courier yet
+      allow get: if signedIn() && (isOwner() || isCourier() || resource.data.courierUid == null);
+      allow list: if signedIn() && (isOwner() || isCourier());
+
+      allow create: if signedIn()
+        && code.matches('^[2-9A-HJKMNP-Z]{8}$')
+        && request.resource.data.ownerUid == me()
+        && request.resource.data.courierUid == null
+        && request.resource.data.status == 'waiting'
+        && text(request.resource.data.item, 80) && request.resource.data.item.size() > 0
+        && request.resource.data.dest.lat is number && request.resource.data.dest.lng is number
+        && eventsOk();
+
+      // Owner: edit details, cancel, remove the courier, or mark it received
+      allow update: if signedIn() && isOwner()
+        && !changed().hasAny(['ownerUid'])
+        && (!changed().hasAny(['courierUid']) || request.resource.data.courierUid == null)
+        && (!changed().hasAny(['courierLoc']) || request.resource.data.courierLoc == null)
+        && eventsOk();
+
+      // A courier takes a job that has no courier yet
+      allow update: if signedIn()
+        && resource.data.courierUid == null && resource.data.status == 'waiting'
+        && request.resource.data.courierUid == me()
+        && request.resource.data.status == 'assigned'
+        && changed().hasOnly(['courierUid', 'courierName', 'courierPhone', 'status', 'events', 'updatedAt'])
+        && eventsOk();
+
+      // The assigned courier: progress, live location, delivering with the PIN, or giving the job back
+      allow update: if signedIn() && isCourier()
+        && !(resource.data.status in ['delivered', 'cancelled'])
+        && changed().hasOnly(['status', 'events', 'courierLoc', 'updatedAt', 'deliveredAt', 'handoffPin',
+                              'courierUid', 'courierName', 'courierPhone', 'problem', 'demoDrive'])
+        && eventsOk()
+        && (
+          (request.resource.data.courierUid == me()
+            && request.resource.data.status in ['assigned', 'picked_up', 'on_the_way', 'problem'])
+          || (request.resource.data.courierUid == me()
+            && request.resource.data.status == 'delivered'
+            && request.resource.data.handoffPin == handoffPin())
+          || (request.resource.data.courierUid == null && request.resource.data.status == 'waiting')
+        );
+
+      allow delete: if signedIn() && isOwner();
+
+      match /private/{docId} {
+        allow read, update, delete: if signedIn()
+          && get(/databases/$(database)/documents/deliveries/$(code)).data.ownerUid == me();
+        allow create: if signedIn()
+          && getAfter(/databases/$(database)/documents/deliveries/$(code)).data.ownerUid == me();
+      }
+    }
+  }
+}
