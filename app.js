@@ -1,7 +1,7 @@
 // Parcel Tracker: accounts, your deliveries as tabs, the courier's checklist, and live tracking
 // of the courier's phone on a spinning Earth. Data lives in Firebase (backend-firebase.js),
 // or in the browser for the demo (backend-demo.js); both offer the same functions.
-import { createGlobe } from './globe.js';
+import { createGlobe } from './globe.js?v=20261022b';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -14,7 +14,7 @@ const SEC = 1000, MIN = 60 * SEC;
 // ---------- Live or demo ----------
 // ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
 if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
-const B = store.get('pt.demo', false) ? await import('./backend-demo.js') : await import('./backend-firebase.js');
+const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261022b') : await import('./backend-firebase.js?v=20261022b');
 const DEMO = B.kind === 'demo';
 if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
@@ -82,6 +82,7 @@ const S = {
   routes: new Map(),
   unsubs: [],
   pendingJoin: null,
+  follow: true,               // keep the courier in view as they move
 };
 let pendingProfile = null;
 
@@ -89,6 +90,7 @@ let pendingProfile = null;
 const globe = createGlobe($('#map'), {
   onMapClick: handleMapClick,
   onPlaceClick: code => select({ kind: 'delivery', code }, { spin: true }),
+  onUserMove: () => { S.follow = false; },  // someone is looking around: stop chasing the courier
 });
 
 // ---------- Small helpers ----------
@@ -724,10 +726,15 @@ function updateMap({ spin = false } = {}) {
   globe.setCourier(loc, loc ? finite(loc.heading) : null);
   if (loc && d.status !== 'delivered') ensureRoute(d, loc); else globe.setRoute(null);
   if (spin) {
-    globe.spinTo(loc || d.dest, 15.6).then(() => { if (loc && currentDelivery() === d) globe.fit([loc, d.dest]); });
-  } else if (loc && globe.isReady()) {
-    const b = globe.map.getBounds();
-    if (!b.contains([loc.lng, loc.lat])) globe.fit([loc, d.dest]);
+    S.follow = true;
+    // After the dive, frame both the courier (where they are by then) and the door
+    globe.spinTo(loc || d.dest, 15.6).then(() => {
+      const cur = currentDelivery();
+      const now = cur && cur.code === d.code && liveLocation(cur);
+      if (now) globe.fit([now, cur.dest]);
+    });
+  } else if (loc && S.follow && globe.isReady() && !globe.isFlying() && !globe.isVisible(loc)) {
+    globe.fit([loc, d.dest]);
   }
 }
 
@@ -1164,8 +1171,9 @@ $('#recenterBtn').addEventListener('click', () => {
   const d = currentDelivery();
   if (S.selected && ['new', 'edit'].includes(S.selected.kind) && S.draft && S.draft.dest) return globe.spinTo(S.draft.dest, 16.5);
   if (!d) return toast('Open a delivery first.');
+  S.follow = true;
   const loc = liveLocation(d);
-  globe.spinTo(loc || d.dest, 15.6).then(() => { if (loc) globe.fit([loc, d.dest]); });
+  if (loc) globe.fit([loc, d.dest]); else globe.spinTo(d.dest, 15.6);
 });
 $('#avatarBtn').addEventListener('click', () => {
   const menu = $('#menu');

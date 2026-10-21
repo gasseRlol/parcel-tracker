@@ -1,7 +1,9 @@
 // The Earth behind the app: a MapLibre globe that shows NASA's Blue Marble from space
 // and fades into a dark street map close up. It spins slowly when idle, and whips
 // around and dives in when a delivery is opened.
-import { Map, Marker, LngLatBounds } from 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.13.0/dist/maplibre-gl.mjs';
+// MapLibre 5 comes from a classic <script> in index.html (window.maplibregl). Its bundled worker
+// starts reliably in iPhone Safari, which MapLibre 6's module worker did not.
+const lib = globalThis.maplibregl;
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
 const BLUE_MARBLE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg';
@@ -27,7 +29,32 @@ function element(html, className) {
   return el;
 }
 
-export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
+// When the map can't start (no WebGL, or the library didn't load), the rest of the app keeps working
+function noGlobe(container, reason) {
+  console.warn('Map unavailable:', reason);
+  container.innerHTML = `<div class="map-off"><strong>The map can't start in this browser.</strong><span>Your deliveries still work. Try updating the phone, or open the link in Safari or Chrome.</span></div>`;
+  const done = Promise.resolve();
+  const nothing = () => {};
+  return {
+    map: null, whenReady: done, isReady: () => false,
+    spinTo: () => done, showEarth: nothing, fit: nothing, setInsets: nothing,
+    setDestination: nothing, setCourier: nothing, setPlaces: nothing, setRoute: nothing,
+    startPick: nothing, movePick: nothing, stopPick: nothing,
+    zoom: () => 0, resize: nothing, isVisible: () => true, isFlying: () => false,
+  };
+}
+
+export function createGlobe(container, options = {}) {
+  if (!lib) return noGlobe(container, 'MapLibre did not load');
+  try {
+    return makeGlobe(container, options);
+  } catch (err) {
+    return noGlobe(container, err);
+  }
+}
+
+function makeGlobe(container, { onMapClick, onPlaceClick, onUserMove } = {}) {
+  const { Map, Marker, LngLatBounds } = lib;
   const map = new Map({
     container,
     style: STYLE,
@@ -35,13 +62,17 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
     zoom: fitZoom(innerWidth, innerHeight),
     minZoom: 0.6,
     maxZoom: 18.5,
+    // iPhones report 3x; drawing at 2x looks the same and keeps Safari inside its graphics memory
+    pixelRatio: Math.min(globalThis.devicePixelRatio || 1, 2),
     attributionControl: { compact: true, customAttribution: 'Earth imagery: NASA Blue Marble' },
   });
 
   // The dark street style names a few icons its sprite doesn't have; draw them as nothing
-  map.setMissingStyleImageResolver(id => {
-    if (!map.hasImage(id)) map.addImage(id, { width: 1, height: 1, data: new Uint8Array(4) });
+  map.on('styleimagemissing', e => {
+    if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
   });
+  // Safari can drop the graphics context when the app goes to the background; redraw when it's back
+  map.on('webglcontextrestored', () => map.triggerRepaint());
 
   // The planet fills the part of the screen the panels leave free
   const spaceZoom = () => {
@@ -54,6 +85,13 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
     map.on('style.load', () => {
       map.setProjection({ type: 'globe' });
       map.addSource('earth', { type: 'raster', tiles: [BLUE_MARBLE], tileSize: 256, maxzoom: 8 });
+      // Navy instead of black behind streets that are still loading
+      if (map.getLayer('background')) map.setPaintProperty('background', 'background-color', '#0E1524');
+      // A blue ocean under the imagery, so the planet is never black while NASA's tiles download
+      map.addLayer({
+        id: 'ocean', type: 'background',
+        paint: { 'background-color': '#0D3266', 'background-opacity': ['interpolate', ['linear'], ['zoom'], 4, 1, 7.5, 0] },
+      });
       map.addLayer({
         id: 'earth', type: 'raster', source: 'earth',
         paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 4, 1, 7.5, 0], 'raster-fade-duration': 250 },
@@ -93,6 +131,9 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
   for (const type of ['mouseup', 'touchend', 'dragend']) map.on(type, settle);
   map.on('wheel', settle);
 
+  map.on('dragstart', () => onUserMove && onUserMove());
+  map.on('zoomstart', e => { if (e.originalEvent && onUserMove) onUserMove(); });
+
   map.on('click', e => {
     if (onMapClick) onMapClick({ lng: e.lngLat.lng, lat: e.lngLat.lat, zoom: map.getZoom() });
   });
@@ -120,23 +161,40 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
     });
   }
 
+  let spinning = false;
   async function spinTo(target, zoom = 15.6) {
     const my = ++token;
     idle = false;
-    await whenReady;
-    map.stop();
-    if (reduceMotion()) { map.jumpTo({ center: [target.lng, target.lat], zoom }); return; }
-    if (map.getZoom() > spaceZoom() + 0.9) {
-      await run(() => map.easeTo({ zoom: spaceZoom(), pitch: 0, bearing: 0, duration: 900, easing: easeInOut }));
+    spinning = true;
+    try {
+      await whenReady;
+      map.stop();
+      if (reduceMotion()) { map.jumpTo({ center: [target.lng, target.lat], zoom }); return; }
+      if (map.getZoom() > spaceZoom() + 0.9) {
+        await run(() => map.easeTo({ zoom: spaceZoom(), pitch: 0, bearing: 0, duration: 900, easing: easeInOut }));
+        if (my !== token) return;
+      }
+      await whirl(target, my);
       if (my !== token) return;
+      await run(() => map.flyTo({ center: [target.lng, target.lat], zoom, curve: 1.35, duration: 2600, essential: true }));
+    } finally {
+      if (my === token) spinning = false;
     }
-    await whirl(target, my);
-    if (my !== token) return;
-    await run(() => map.flyTo({ center: [target.lng, target.lat], zoom, curve: 1.35, duration: 2600, essential: true }));
+  }
+
+  // Is this point inside the part of the screen the panels leave free?
+  function isVisible(p, margin = 48) {
+    if (!ready) return true;
+    const pt = map.project([p.lng, p.lat]);
+    const pad = map.getPadding();
+    const c = map.getContainer();
+    return pt.x >= pad.left + margin && pt.x <= c.clientWidth - pad.right - margin
+      && pt.y >= pad.top + margin && pt.y <= c.clientHeight - pad.bottom - margin;
   }
 
   function showEarth() {
     const my = ++token;
+    spinning = false;
     const c = map.getCenter();
     whenReady.then(() => {
       if (my !== token) return;
@@ -150,6 +208,7 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
   function fit(points, { animate = true } = {}) {
     const my = ++token;
     idle = false;
+    spinning = false;
     const pts = points.filter(Boolean);
     if (!pts.length) return;
     whenReady.then(() => {
@@ -259,6 +318,8 @@ export function createGlobe(container, { onMapClick, onPlaceClick } = {}) {
     setDestination, setCourier, setPlaces, setRoute,
     startPick, movePick, stopPick,
     zoom: () => map.getZoom(),
+    isVisible,
+    isFlying: () => spinning || map.isMoving(),
     resize: () => map.resize(),
   };
 }

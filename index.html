@@ -16,7 +16,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.13.0/dist/maplibre-gl.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+<script defer src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <style>
 /* Layout: the Earth fills the screen; a top bar and delivery tabs float over it, and one panel
    (a bottom sheet on phones, a left column on wide screens) holds whatever is open. */
@@ -71,6 +72,8 @@ button { cursor: pointer; }
 .maplibregl-ctrl-attrib { font-size: 10.5px; }
 .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(10, 16, 29, .85) !important; color: var(--muted); }
 .maplibregl-ctrl-attrib a { color: var(--muted); }
+.map-off { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 6px; padding: 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line-2); text-align: center; font-size: 14px; color: var(--muted); }
+.map-off strong { color: var(--text); font-size: 15px; }
 
 /* Markers */
 .pin { cursor: pointer; }
@@ -369,6 +372,6 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
 <div class="toast" id="toast" role="status" hidden><span id="toastText"></span><button type="button" id="toastAction" hidden></button></div>
 <p class="banner" id="testBanner" hidden>Test mode · local emulators</p>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20261022b"></script>
 </body>
 </html>
