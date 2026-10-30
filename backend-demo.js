@@ -1,8 +1,9 @@
 // The demo backend: the same functions as backend-firebase.js, but everything lives in this
 // browser (localStorage), shared between tabs. It comes with sample deliveries in Cairo and a
-// demo courier who drives one of them to your door along a real road route.
+// demo courier who drives one of them to your door along a real road route. connect.js uses it
+// too, so another demo app on this site (Quayside) can hand deliveries to the tracker.
 const KEY = 'pt.demo.world.v1';
-const ME = 'demo-you';
+export const ME = 'demo-you';
 const USER = { uid: ME, email: 'demo@parcel-tracker.app', displayName: 'You' };
 const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN;
 
@@ -22,7 +23,7 @@ function seed() {
   return {
     profiles: { [ME]: { name: 'You', phone: '', role: 'customer', createdAt: t, updatedAt: t } },
     pins: { RN4SH7EZ: '3816', HP6DRK2Q: '7240', BK3XWT9M: '5052', CK8BDY5P: '4271' },
-    robot: { code: 'RN4SH7EZ', coords: [[start.lng, start.lat], [home.lng, home.lat]], startedAt: t, speed: 12 },
+    robots: { RN4SH7EZ: { coords: [[start.lng, start.lat], [home.lng, home.lat]], startedAt: t, speed: 12, courierUid: 'demo-karim' } },
     deliveries: {
       RN4SH7EZ: {
         ownerUid: ME, ownerName: 'You', ownerPhone: '', item: 'Running shoes', from: 'Sports shop',
@@ -59,27 +60,55 @@ function seed() {
   };
 }
 
-function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
+// Older saved worlds had one robot; now any delivery can have its own
+function migrate(w) {
+  if (!w.robots) w.robots = {};
+  if (w.robot) { w.robots[w.robot.code] = w.robots[w.robot.code] || { ...w.robot, courierUid: 'demo-karim' }; delete w.robot; }
+  return w;
+}
+function load() { try { const w = JSON.parse(localStorage.getItem(KEY)); return w && w.deliveries ? migrate(w) : null; } catch { return null; } }
 let world = load();
-if (!world || !world.deliveries) { world = seed(); persist(); fetchRobotRoute(); }
+if (!world) { world = seed(); persist(true); fetchRobotRoute('RN4SH7EZ'); }
 
 const listeners = new Set();
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(world)); } catch {} }
+const removedHere = new Set();
+// Two tabs (say the tracker and Quayside) can change the demo at the same moment, so before
+// saving, keep anything the other tab saved that this copy has not seen yet.
+function persist(replace = false) {
+  try {
+    const stored = !replace && load();
+    if (stored) {
+      for (const [code, d] of Object.entries(stored.deliveries)) {
+        if (removedHere.has(code)) continue;
+        const mine = world.deliveries[code];
+        if (!mine) { world.deliveries[code] = d; if (stored.pins[code]) world.pins[code] = stored.pins[code]; }
+        else if ((d.updatedAt || 0) > (mine.updatedAt || 0)) world.deliveries[code] = d;
+      }
+      for (const [code, r] of Object.entries(stored.robots)) if (!world.robots[code] && !removedHere.has(code)) world.robots[code] = r;
+    }
+    localStorage.setItem(KEY, JSON.stringify(world));
+  } catch {}
+}
 function changed() { persist(); for (const l of listeners) queueMicrotask(l); }
 addEventListener('storage', e => { if (e.key === KEY) { world = load() || seed(); for (const l of listeners) l(); } });
 
-export function reset() { world = seed(); persist(); fetchRobotRoute(); }
+export function reset() { world = seed(); removedHere.clear(); persist(true); fetchRobotRoute('RN4SH7EZ'); }
 export const peekPin = code => world.pins[code] || null;
+export const get = code => (world.deliveries[code] ? { code, ...clone(world.deliveries[code]) } : null);
+export const all = () => Object.entries(world.deliveries).map(([code, d]) => ({ code, ...clone(d) }));
+export const onChange = fn => { listeners.add(fn); return () => listeners.delete(fn); };
+export const robotOf = code => (world.robots[code] ? clone(world.robots[code]) : null);
 
-// ---------- The demo courier drives along a real road route ----------
-async function fetchRobotRoute() {
-  const r = world.robot;
+// ---------- Demo couriers drive along real routes ----------
+async function fetchRobotRoute(code) {
+  const r = world.robots[code];
+  if (!r) return;
   const [a, b] = [r.coords[0], r.coords[r.coords.length - 1]];
   try {
     const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${a[0]},${a[1]};${b[0]},${b[1]}?overview=full&geometries=geojson`);
     const json = await res.json();
     const coords = json.routes && json.routes[0] && json.routes[0].geometry.coordinates;
-    if (coords && coords.length > 1 && world.robot === r) { r.coords = [...coords, b]; r.startedAt = Date.now(); persist(); }
+    if (coords && coords.length > 1 && world.robots[code] === r) { r.coords = [...coords, b]; r.startedAt = Date.now(); persist(); }
   } catch {}
 }
 function dist(a, b) {
@@ -93,22 +122,44 @@ function heading(a, b) {
   const x = Math.cos(a[1] * rad) * Math.sin(b[1] * rad) - Math.sin(a[1] * rad) * Math.cos(b[1] * rad) * Math.cos((b[0] - a[0]) * rad);
   return (Math.atan2(y, x) / rad + 360) % 360;
 }
-function robotTick() {
-  const r = world.robot;
-  const d = r && world.deliveries[r.code];
-  if (!d || d.status !== 'on_the_way' || d.courierUid !== 'demo-karim') return;
+export const pathLength = c => c.reduce((s, p, i) => (i ? s + dist(c[i - 1], p) : 0), 0);
+// Where a robot is at time t: worked out from its start time, so every open tab agrees
+function robotAt(r, t) {
   const c = r.coords;
-  let s = ((Date.now() - r.startedAt) / SEC) * r.speed;
+  let s = ((t - r.startedAt) / SEC) * r.speed;
   let i = 1;
   while (i < c.length) { const seg = dist(c[i - 1], c[i]); if (s <= seg) break; s -= seg; i++; }
-  let p, h = null;
-  if (i >= c.length) p = c[c.length - 1];
-  else { const seg = dist(c[i - 1], c[i]) || 1, f = s / seg; p = [c[i - 1][0] + (c[i][0] - c[i - 1][0]) * f, c[i - 1][1] + (c[i][1] - c[i - 1][1]) * f]; h = heading(c[i - 1], c[i]); }
-  d.courierLoc = { lat: p[1], lng: p[0], acc: 6, heading: h, speed: i >= c.length ? 0 : r.speed, at: Date.now() };
-  d.updatedAt = Date.now();
-  changed();
+  if (i >= c.length) return { p: c[c.length - 1], h: null, done: true };
+  const seg = dist(c[i - 1], c[i]) || 1, f = s / seg;
+  return { p: [c[i - 1][0] + (c[i][0] - c[i - 1][0]) * f, c[i - 1][1] + (c[i][1] - c[i - 1][1]) * f], h: heading(c[i - 1], c[i]), done: false };
+}
+function robotTick() {
+  const t = Date.now();
+  let moved = false;
+  for (const [code, r] of Object.entries(world.robots)) {
+    const d = world.deliveries[code];
+    if (!d || d.status !== 'on_the_way' || d.courierUid !== (r.courierUid || 'demo-karim')) continue;
+    const { p, h, done } = robotAt(r, t);
+    // Couriers sent by another app hand the order over by themselves a little after arriving
+    if (done && r.autoDeliver && t >= r.startedAt + (pathLength(r.coords) / r.speed) * SEC + (r.hold || 12 * SEC)) {
+      d.status = 'delivered'; d.handoffPin = world.pins[code]; d.deliveredAt = t; d.updatedAt = t; d.receivedBy = r.receiver || '';
+      d.courierLoc = { lat: p[1], lng: p[0], acc: 6, heading: null, speed: 0, at: t };
+      d.events = [...(d.events || []), { s: 'delivered', at: t, by: 'courier', note: r.receiver ? `Handed over with the PIN to ${r.receiver}` : 'Handed over with the PIN' }];
+      moved = true;
+      continue;
+    }
+    d.courierLoc = { lat: p[1], lng: p[0], acc: 6, heading: h, speed: done ? 0 : r.speed, at: t };
+    d.updatedAt = t;
+    moved = true;
+  }
+  if (moved) changed();
 }
 setInterval(robotTick, SEC);
+// Starts a demo courier on a route ([lng, lat] points) for a delivery that is on its way
+export function startRobot(code, { coords, speed, courierUid, autoDeliver = true, receiver = '', hold } = {}) {
+  world.robots[code] = { coords, startedAt: Date.now(), speed, courierUid, autoDeliver, receiver, ...(hold ? { hold } : {}) };
+  changed();
+}
 
 // ---------- Accounts (the demo has one person: you) ----------
 export function onAuth(cb) { queueMicrotask(() => cb(USER)); return () => {}; }
@@ -144,7 +195,8 @@ export async function update(code, fields, event) {
   if (!d) throw denied();
   if (fields.courierUid === ME && d.courierUid && d.courierUid !== ME) throw denied();
   Object.assign(d, clone(fields));
-  if (event) d.events = [...(d.events || []), event];
+  d.updatedAt = Math.max(Date.now(), (d.updatedAt || 0) + 1);
+  if (event) d.events = [...(d.events || []), ...(Array.isArray(event) ? event : [event])];
   changed();
 }
 export async function getPin(code) { return world.deliveries[code] && world.deliveries[code].ownerUid === ME ? world.pins[code] || null : null; }
@@ -157,4 +209,4 @@ export async function deliver(code, fields, event) {
   if (fields.handoffPin !== world.pins[code]) throw denied();
   await update(code, fields, event);
 }
-export async function remove(code) { delete world.deliveries[code]; delete world.pins[code]; changed(); }
+export async function remove(code) { removedHere.add(code); delete world.deliveries[code]; delete world.pins[code]; delete world.robots[code]; changed(); }

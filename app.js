@@ -1,7 +1,7 @@
 // Parcel Tracker: accounts, your deliveries as tabs, the courier's checklist, and live tracking
 // of the courier's phone on a spinning Earth. Data lives in Firebase (backend-firebase.js),
 // or in the browser for the demo (backend-demo.js); both offer the same functions.
-import { createGlobe } from './globe.js?v=20261026a';
+import { createGlobe } from './globe.js?v=20261030a';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -14,7 +14,7 @@ const SEC = 1000, MIN = 60 * SEC;
 // ---------- Live or demo ----------
 // ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
 if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
-const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261026a') : await import('./backend-firebase.js?v=20261026a');
+const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261030a') : await import('./backend-firebase.js?v=20261030a');
 const DEMO = B.kind === 'demo';
 if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
@@ -488,10 +488,10 @@ function etaHtml(d, loc) {
   const along = r && alongRoute(r.coords, loc);
   const onRoute = along && along.off < 200;
   const meters = onRoute ? along.remaining : distance(loc, d.dest) * 1.35;
-  const secs = onRoute ? r.duration * 1.2 * (along.remaining / Math.max(1, r.distance)) : (meters / 1000) / 22 * 3600;
+  const secs = onRoute ? r.duration * (r.fixed ? 1 : 1.2) * (along.remaining / Math.max(1, r.distance)) : (meters / 1000) / 22 * 3600;
   if (meters < 60) return { big: 'At your door', line: 'The courier is right outside.' };
   const min = Math.max(1, Math.round(secs / 60));
-  return { big: `About ${min} min away`, line: `${km(meters)} by road` };
+  return { big: `About ${min} min away`, line: `${km(meters)} ${r && r.fixed ? 'to go' : 'by road'}` };
 }
 
 function liveCardHtml(d, loc) {
@@ -520,7 +520,9 @@ function factsHtml(d, forCourier) {
     ['Deliver to', d.destLabel || `${d.dest.lat.toFixed(5)}, ${d.dest.lng.toFixed(5)}`, true],
     d.address ? ['Address details', d.address, true] : null,
     d.notes ? ['Notes for the courier', d.notes, true] : null,
-    d.from ? ['From', d.from] : null,
+    d.lines && d.lines.length ? ['In this delivery', d.lines.map(l => `${l.qty} ${l.unit} ${l.desc}`).join(' · '), true] : null,
+    d.from ? ['From', d.source && d.source.ref ? `${d.from} (${d.source.ref})` : d.from] : null,
+    d.receivedBy && d.status === 'delivered' ? ['Received by', d.receivedBy] : null,
     ['Added', when(ms(d.createdAt) || Date.now())],
     forCourier ? ['Customer', d.ownerName || 'Customer'] : null,
   ].filter(Boolean);
@@ -764,6 +766,18 @@ function alongRoute(coords, loc) {
 // followed as the courier moves; it is fetched again if they leave it or after two minutes.
 const routeAsked = new Map();
 async function ensureRoute(d, loc) {
+  // A demo courier follows a set route (by road, then by boat to a ship at anchor): show that one
+  const robot = B.robotOf && B.robotOf(d.code);
+  if (robot && robot.coords.length > 1) {
+    let rr = S.routes.get(d.code);
+    if (!rr || rr.startedAt !== robot.startedAt) {
+      const length = B.pathLength(robot.coords);
+      rr = { coords: robot.coords, distance: length, duration: length / robot.speed, at: Date.now(), startedAt: robot.startedAt, fixed: true };
+      S.routes.set(d.code, rr);
+    }
+    globe.setRoute([[loc.lng, loc.lat], ...alongRoute(rr.coords, loc).rest]);
+    return;
+  }
   const r = S.routes.get(d.code);
   const along = r && r.coords.length > 1 && alongRoute(r.coords, loc);
   const straight = [[loc.lng, loc.lat], [d.dest.lng, d.dest.lat]];
