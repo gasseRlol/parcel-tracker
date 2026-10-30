@@ -71,20 +71,23 @@ let world = load();
 if (!world) { world = seed(); persist(true); fetchRobotRoute('RN4SH7EZ'); }
 
 const listeners = new Set();
-const removedHere = new Set();
 // Two tabs (say the tracker and Quayside) can change the demo at the same moment, so before
 // saving, keep anything the other tab saved that this copy has not seen yet.
 function persist(replace = false) {
   try {
     const stored = !replace && load();
     if (stored) {
+      // Deliveries deleted in any tab stay deleted
+      const gone = new Set([...(world.removed || []), ...(stored.removed || [])]);
+      world.removed = [...gone].slice(-500);
+      for (const code of gone) { delete world.deliveries[code]; delete world.pins[code]; delete world.robots[code]; }
       for (const [code, d] of Object.entries(stored.deliveries)) {
-        if (removedHere.has(code)) continue;
+        if (gone.has(code)) continue;
         const mine = world.deliveries[code];
         if (!mine) { world.deliveries[code] = d; if (stored.pins[code]) world.pins[code] = stored.pins[code]; }
         else if ((d.updatedAt || 0) > (mine.updatedAt || 0)) world.deliveries[code] = d;
       }
-      for (const [code, r] of Object.entries(stored.robots)) if (!world.robots[code] && !removedHere.has(code)) world.robots[code] = r;
+      for (const [code, r] of Object.entries(stored.robots)) if (!world.robots[code] && !gone.has(code)) world.robots[code] = r;
     }
     localStorage.setItem(KEY, JSON.stringify(world));
   } catch {}
@@ -92,7 +95,7 @@ function persist(replace = false) {
 function changed() { persist(); for (const l of listeners) queueMicrotask(l); }
 addEventListener('storage', e => { if (e.key === KEY) { world = load() || seed(); for (const l of listeners) l(); } });
 
-export function reset() { world = seed(); removedHere.clear(); persist(true); fetchRobotRoute('RN4SH7EZ'); }
+export function reset() { world = seed(); persist(true); fetchRobotRoute('RN4SH7EZ'); }
 export const peekPin = code => world.pins[code] || null;
 export const get = code => (world.deliveries[code] ? { code, ...clone(world.deliveries[code]) } : null);
 export const all = () => Object.entries(world.deliveries).map(([code, d]) => ({ code, ...clone(d) }));
@@ -209,4 +212,14 @@ export async function deliver(code, fields, event) {
   if (fields.handoffPin !== world.pins[code]) throw denied();
   await update(code, fields, event);
 }
-export async function remove(code) { removedHere.add(code); delete world.deliveries[code]; delete world.pins[code]; delete world.robots[code]; changed(); }
+export async function remove(code) {
+  world.removed = [...(world.removed || []), code];
+  delete world.deliveries[code]; delete world.pins[code]; delete world.robots[code];
+  changed();
+}
+// Empties the demo: no deliveries at all (the menu's "Restart the demo" brings the samples back)
+export function clearAll() {
+  world.removed = [...(world.removed || []), ...Object.keys(world.deliveries)];
+  world.deliveries = {}; world.pins = {}; world.robots = {};
+  changed();
+}

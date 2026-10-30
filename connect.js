@@ -8,7 +8,7 @@
 //   complete(code, by) / cancel(code, why)
 // Here the calls work on the demo data kept in this browser. For a real company the same
 // calls become web requests to the tracker's server; CONNECT.md describes them.
-import * as T from './backend-demo.js?v=20261030a';
+import * as T from './backend-demo.js?v=20261030b';
 
 const SEC = 1000;
 const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -79,6 +79,9 @@ export async function complete(code, receivedBy = '') {
     { s: 'delivered', at: t, by: 'courier', note: receivedBy ? `Signed for by ${receivedBy}` : '' });
   return true;
 }
+// Demo only: empties the tracker's demo data in this browser, so a test starts from nothing
+export const clearDemo = () => T.clearAll();
+
 export async function cancel(code, why = '') {
   const d = T.get(code);
   if (!d || ['delivered', 'cancelled'].includes(d.status)) return false;

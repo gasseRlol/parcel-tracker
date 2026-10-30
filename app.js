@@ -14,7 +14,7 @@ const SEC = 1000, MIN = 60 * SEC;
 // ---------- Live or demo ----------
 // ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
 if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
-const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261030a') : await import('./backend-firebase.js?v=20261030a');
+const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261030b') : await import('./backend-firebase.js?v=20261030b');
 const DEMO = B.kind === 'demo';
 if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
