@@ -108,7 +108,7 @@ function robotTick() {
   d.updatedAt = Date.now();
   changed();
 }
-setInterval(robotTick, 2 * SEC);
+setInterval(robotTick, SEC);
 
 // ---------- Accounts (the demo has one person: you) ----------
 export function onAuth(cb) { queueMicrotask(() => cb(USER)); return () => {}; }

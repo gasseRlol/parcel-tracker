@@ -1,7 +1,7 @@
 // Parcel Tracker: accounts, your deliveries as tabs, the courier's checklist, and live tracking
 // of the courier's phone on a spinning Earth. Data lives in Firebase (backend-firebase.js),
 // or in the browser for the demo (backend-demo.js); both offer the same functions.
-import { createGlobe } from './globe.js?v=20261022b';
+import { createGlobe } from './globe.js?v=20261026a';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -14,7 +14,7 @@ const SEC = 1000, MIN = 60 * SEC;
 // ---------- Live or demo ----------
 // ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
 if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
-const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261022b') : await import('./backend-firebase.js?v=20261022b');
+const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261026a') : await import('./backend-firebase.js?v=20261026a');
 const DEMO = B.kind === 'demo';
 if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
@@ -485,9 +485,10 @@ function liveLocation(d) {
 
 function etaHtml(d, loc) {
   const r = S.routes.get(d.code);
-  const fresh = r && distance(r.from, loc) < 250;
-  const meters = fresh ? r.distance : distance(loc, d.dest) * 1.35;
-  const secs = fresh ? r.duration * 1.2 : (meters / 1000) / 22 * 3600;
+  const along = r && alongRoute(r.coords, loc);
+  const onRoute = along && along.off < 200;
+  const meters = onRoute ? along.remaining : distance(loc, d.dest) * 1.35;
+  const secs = onRoute ? r.duration * 1.2 * (along.remaining / Math.max(1, r.distance)) : (meters / 1000) / 22 * 3600;
   if (meters < 60) return { big: 'At your door', line: 'The courier is right outside.' };
   const min = Math.max(1, Math.round(secs / 60));
   return { big: `About ${min} min away`, line: `${km(meters)} by road` };
@@ -739,21 +740,46 @@ function updateMap({ spin = false } = {}) {
 }
 
 // Road route from the courier to the door (free OSRM demo server; refreshed at most every 30 s)
+// Where the courier is along a route: metres still to go, and how far they are from it
+function alongRoute(coords, loc) {
+  const p = { lng: loc.lng, lat: loc.lat };
+  let best = { off: Infinity, i: 0, point: coords[0] };
+  for (let i = 0; i < coords.length - 1; i++) {
+    const a = { lng: coords[i][0], lat: coords[i][1] }, b = { lng: coords[i + 1][0], lat: coords[i + 1][1] };
+    // Project onto the segment in a local flat frame (fine at street scale)
+    const kx = Math.cos(a.lat * Math.PI / 180);
+    const ax = 0, ay = 0, bx = (b.lng - a.lng) * kx, by = b.lat - a.lat, px = (p.lng - a.lng) * kx, py = p.lat - a.lat;
+    const len = bx * bx + by * by;
+    const t = len ? Math.max(0, Math.min(1, ((px - ax) * bx + (py - ay) * by) / len)) : 0;
+    const q = { lng: a.lng + (b.lng - a.lng) * t, lat: a.lat + (b.lat - a.lat) * t };
+    const off = distance(p, q);
+    if (off < best.off) best = { off, i, point: q };
+  }
+  let remaining = distance(best.point, { lng: coords[best.i + 1][0], lat: coords[best.i + 1][1] });
+  for (let i = best.i + 1; i < coords.length - 1; i++) remaining += distance({ lng: coords[i][0], lat: coords[i][1] }, { lng: coords[i + 1][0], lat: coords[i + 1][1] });
+  return { off: best.off, remaining, rest: [[best.point.lng, best.point.lat], ...coords.slice(best.i + 1)] };
+}
+
+// Road route from the courier to the door (free OSRM demo server). It is fetched once and
+// followed as the courier moves; it is fetched again if they leave it or after two minutes.
 const routeAsked = new Map();
 async function ensureRoute(d, loc) {
   const r = S.routes.get(d.code);
-  if (r && distance(r.from, loc) < 150) { globe.setRoute([[loc.lng, loc.lat], ...r.coords]); return; }
-  if (r) globe.setRoute([[loc.lng, loc.lat], [d.dest.lng, d.dest.lat]]);
-  const last = routeAsked.get(d.code) || 0;
-  if (Date.now() - last < 30 * SEC) { if (!r) globe.setRoute([[loc.lng, loc.lat], [d.dest.lng, d.dest.lat]]); return; }
-  routeAsked.set(d.code, Date.now());
+  const along = r && r.coords.length > 1 && alongRoute(r.coords, loc);
+  const straight = [[loc.lng, loc.lat], [d.dest.lng, d.dest.lat]];
+  if (along && along.off < 200) globe.setRoute([[loc.lng, loc.lat], ...along.rest]);
+  else globe.setRoute(straight);
+  const stale = !r || !along || along.off >= 200 || Date.now() - r.at > 2 * MIN;
+  const wait = (routeAsked.get(d.code) || 0) - Date.now();
+  if (!stale || wait > 0) return;
+  routeAsked.set(d.code, Date.now() + 30 * SEC);
   try {
     const route = await fetchRoute(loc, d.dest);
-    S.routes.set(d.code, { ...route, from: { lng: loc.lng, lat: loc.lat } });
+    S.routes.set(d.code, { ...route, at: Date.now() });
     const cur = currentDelivery();
     if (cur && cur.code === d.code) { globe.setRoute(route.coords); refreshPanel(); }
   } catch {
-    globe.setRoute([[loc.lng, loc.lat], [d.dest.lng, d.dest.lat]]);
+    routeAsked.set(d.code, Date.now() + 4 * SEC);  // the free server sometimes says "too many requests": try again soon
   }
 }
 async function fetchRoute(from, to) {
