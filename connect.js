@@ -11,7 +11,7 @@
 //   trackUrl(code)            the link the customer follows the order with
 //   courierUrl(code)          the link the driver opens on his phone to take the job
 // For a real company the same calls become web requests to the tracker's server (CONNECT.md).
-import * as T from './backend-room.js?v=20261031a';
+import * as T from './backend-room.js?v=20261031b';
 import { useEmulators } from './firebase-config.js';
 
 const SEC = 1000;
@@ -55,24 +55,29 @@ export async function saveOrder(o) {
   const ev = [];
   const tripRef = cur.trip && cur.trip.ref;
   const stageStatus = STAGE_STATUS[o.stage];
-  if (tripRef && tripRef !== o.tripRef) {
-    // The trip is over on the company's side: delivered (maybe only part of the order) or called off
-    f.trip = null; f.courierLoc = null;
-    if (o.stage === 3) { if (cur.status !== 'delivered') { f.status = 'delivered'; f.deliveredAt = t; ev.push({ s: 'delivered', at: t, by: 'company' }); } }
-    else if (cur.status === 'delivered') { f.status = stageStatus; f.handoffPin = T.deleteField(); f.deliveredAt = null; ev.push({ s: 'part_delivered', at: t, by: 'company', note: 'The rest of the order is not on the ship yet' }); }
-    else { f.status = stageStatus; ev.push({ s: 'trip_cancelled', at: t, by: 'company' }); }
-  }
-  if (o.tripRef && o.tripRef !== tripRef) {
-    // A delivery note is packed and may go out: the driver can start
-    f.trip = { ref: o.tripRef, lines: o.tripLines || [], at: t };
-    f.status = cur.courierUid && cur.courierUid !== PRETEND ? 'assigned' : 'waiting';
-    if (cur.courierUid === PRETEND) { f.courierUid = null; f.courierName = ''; }
-    f.courierLoc = null;
-    if (cur.status === 'delivered') { f.handoffPin = T.deleteField(); f.deliveredAt = null; }
-    ev.push({ s: 'released', at: t, by: 'company', note: o.tripNote || '' });
-  } else if (!o.tripRef && !tripRef && cur.status !== 'cancelled' && stageStatus !== 'delivered' && cur.status !== stageStatus) {
+  // While a driver is collecting or driving, his steps decide the status, not the company's stage
+  const driverOn = !!cur.courierUid && ['assigned', 'picked_up', 'on_the_way', 'problem'].includes(cur.status);
+  if (o.tripRef !== (tripRef || null)) f.trip = o.tripRef ? { ref: o.tripRef, lines: o.tripLines || [], at: t } : null;
+  if (cur.status === 'delivered') {
+    if (o.stage !== 3 && !(o.tripRef && o.tripRef === tripRef)) {
+      // Only part of the order is on the ship: back to the rest (the same driver keeps the job)
+      f.status = cur.courierUid ? 'assigned' : o.tripRef ? 'waiting' : stageStatus;
+      f.handoffPin = T.deleteField(); f.deliveredAt = null; f.courierLoc = null;
+      ev.push({ s: 'part_delivered', at: t, by: 'company', note: 'The rest of the order is not on the ship yet' });
+    }
+  } else if (o.stage === 3) {
+    f.status = 'delivered'; f.deliveredAt = t; f.courierLoc = null;
+    ev.push({ s: 'delivered', at: t, by: 'company' });
+  } else if (driverOn) {
+    // nothing: the driver's run goes on
+  } else if (o.tripRef) {
+    if (o.tripRef !== tripRef || cur.status !== 'waiting') {
+      f.status = 'waiting';
+      ev.push({ s: 'released', at: t, by: 'company', note: o.tripNote || '' });
+    }
+  } else if (cur.status !== 'cancelled' && cur.status !== stageStatus) {
     f.status = stageStatus;
-    ev.push({ s: stageStatus, at: t, by: 'company' });
+    ev.push({ s: tripRef ? 'trip_cancelled' : stageStatus, at: t, by: 'company' });
   }
   await T.update(o.code, f, ev.length ? ev : null);
   return { code: o.code, pin: o.pin };
@@ -126,7 +131,8 @@ export const isPretending = code => sims.has(code);
 // trip: { origin: { lat, lng }, roadTo?: { lat, lng }, sea?: [{ lat, lng }], courierName, receiver }
 export async function pretendDriver(code, trip) {
   const d = T.get(code);
-  if (!d || !d.trip || ['delivered', 'cancelled'].includes(d.status) || sims.has(code)) return false;
+  if (!d || ['delivered', 'cancelled', 'on_the_way'].includes(d.status) || sims.has(code)) return false;
+  if (!(d.lines || []).some(l => !['pending', 'ship'].includes(l.stage))) return false;
   sims.set(code, 0);
   const roadEnd = trip.roadTo || d.dest;
   let c = await road(trip.origin, roadEnd);
@@ -137,16 +143,19 @@ export async function pretendDriver(code, trip) {
   const total = c.reduce((s, p, i) => (i ? s + meters(c[i - 1], p) : 0), 0);
   const speed = Math.max(12, total / 150);
   const t0 = Date.now();
-  const steps = [];
-  if (!d.courierUid) steps.push('assigned');
-  if (!['picked_up', 'on_the_way'].includes(d.status)) steps.push('picked_up');
-  steps.push('on_the_way');
+  const open = (d.lines || []).filter(l => !['pending', 'ship'].includes(l.stage));
+  const ticks = {};
+  for (const l of open) if (!(d.collected && d.collected[l.id])) ticks[`collected.${l.id}`] = t0;
+  const evs = [];
+  if (!d.courierUid) evs.push({ s: 'assigned', at: t0, by: 'courier' });
+  for (const l of open) if (!(d.collected && d.collected[l.id])) evs.push({ s: 'collected', at: t0, by: 'courier', note: `${l.qty} ${l.unit || ''} ${l.desc}` });
+  evs.push({ s: 'on_the_way', at: t0 + 1, by: 'courier' });
   try {
     await T.update(code, {
       courierUid: d.courierUid || PRETEND, courierName: d.courierName || trip.courierName || 'Pretend driver', courierPhone: d.courierPhone || '',
-      status: 'on_the_way', demoDrive: true, updatedAt: t0,
+      status: 'on_the_way', demoDrive: true, updatedAt: t0, ...ticks,
       courierLoc: { lat: trip.origin.lat, lng: trip.origin.lng, acc: 6, heading: null, speed, at: t0 },
-    }, steps.map(s => ({ s, at: t0, by: 'courier' })));
+    }, evs);
   } catch (e) { sims.delete(code); throw e; }
   const tick = async () => {
     if (!sims.has(code)) return;
@@ -170,9 +179,14 @@ export async function pretendDriver(code, trip) {
 // ---------- Reading ----------
 const LABEL = {
   at_supplier: 'With the supplier', in_warehouse: 'In the warehouse', waiting: 'Packed, waiting for a driver',
-  assigned: 'Driver ready, not started', picked_up: 'Driver has it', on_the_way: 'On the way',
+  assigned: 'Driver took the job', picked_up: 'Driver is collecting', on_the_way: 'On the way',
   delivered: 'On the ship', problem: 'Driver reported a problem', cancelled: 'Cancelled',
 };
+// How many of the pieces still to bring the driver has collected
+function progressOf(d) {
+  const open = (d.lines || []).filter(l => !['pending', 'ship'].includes(l.stage));
+  return { got: open.filter(l => d.collected && d.collected[l.id]).length, of: open.length };
+}
 function km(a, b) {
   const R = 6371, rad = Math.PI / 180;
   const h = Math.sin((b.lat - a.lat) * rad / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin((b.lng - a.lng) * rad / 2) ** 2;
@@ -187,7 +201,8 @@ export function status(code) {
     code, status: d.status, label: LABEL[d.status] || d.status, stage: d.stage, trip: d.trip || null,
     courierName: d.courierName || '', hasDriver: !!d.courierUid, pretend: d.courierUid === PRETEND,
     courierLoc: loc || null, kmLeft: loc && d.status === 'on_the_way' ? km(loc, d.dest) : null,
-    sentAt: evAt('picked_up') || evAt('on_the_way'), deliveredAt: d.deliveredAt || evAt('delivered'), receivedBy: d.receivedBy || '',
+    sentAt: evAt('on_the_way') || evAt('picked_up'), deliveredAt: d.deliveredAt || evAt('delivered'), receivedBy: d.receivedBy || '',
+    collected: d.collected || {}, ...progressOf(d),
     problem: d.status === 'problem' ? d.problem || '' : '', source: d.source || null, createdAt: d.createdAt,
   };
 }

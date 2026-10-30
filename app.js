@@ -18,7 +18,7 @@ const params = new URLSearchParams(location.search);
 if (params.has('room')) { store.set('pt.room', params.get('room')); store.set('pt.demo', false); }
 else if (params.has('demo')) { store.set('pt.demo', true); store.set('pt.room', null); }
 const ROOM_ID = store.get('pt.room', null);
-const B = ROOM_ID ? await import('./backend-room.js?v=20261031a')
+const B = ROOM_ID ? await import('./backend-room.js?v=20261031b')
   : store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261031a') : await import('./backend-firebase.js?v=20261031a');
 if (ROOM_ID) { try { B.useRoom(ROOM_ID); } catch { store.set('pt.room', null); location.replace(location.pathname); } }
 const DEMO = B.kind === 'demo';
@@ -68,6 +68,7 @@ const EVENT_TEXT = {
   in_warehouse: 'Everything is in the warehouse',
   released: 'Packed and ready to go out',
   part_delivered: 'Part of the order is on the ship',
+  collected: 'Piece collected',
   trip_cancelled: 'Trip called off',
 };
 // Orders a company sends (Quayside): the same statuses, worded for a delivery to a ship, in three stages
@@ -77,15 +78,32 @@ const ORDER_LABEL = {
 };
 const statusOf = d => {
   const st = STATUS[d.status] || STATUS.waiting;
+  if (d.kind === 'order' && d.status === 'picked_up') {
+    const p = progress(d), label = p.got >= p.of ? 'All pieces collected' : `Collecting: ${p.got} of ${p.of} pieces`;
+    return { ...st, label, short: label };
+  }
   return d.kind === 'order' && ORDER_LABEL[d.status] ? { ...st, label: ORDER_LABEL[d.status], short: ORDER_LABEL[d.status] } : st;
 };
+// The driver ticks off each piece of an order as he collects it (at a supplier or at the warehouse)
+const isGot = (d, l) => !!(d.collected && d.collected[l.id]);
+const openLines = d => (d.lines || []).filter(l => !['pending', 'ship'].includes(l.stage));
+const progress = d => { const open = openLines(d); return { got: open.filter(l => isGot(d, l)).length, of: open.length }; };
+const DRIVER_AT_WORK = ['assigned', 'picked_up', 'on_the_way', 'problem'];
+// Where an order goes back to when nobody is driving it
+const restStatus = d => (d.trip ? 'waiting' : (d.stage || 1) >= 2 ? 'in_warehouse' : 'at_supplier');
 const ORDER_STEPS = ['With the supplier', 'In the warehouse', 'On the ship'];
-const orderStage = d => (d.status === 'delivered' ? 3 : d.status === 'at_supplier' ? 0 : d.status === 'in_warehouse' ? 1 : 2);
+const orderStage = d => (d.status === 'delivered' ? 3 : ['picked_up', 'on_the_way', 'problem', 'waiting'].includes(d.status) ? 2 : (d.stage || 1) >= 2 ? 1 : 0);
 const released = d => !['at_supplier', 'in_warehouse'].includes(d.status);
 const LINE_STAGE = {
   pending: ['Not ordered yet', 'idle'], supplier: ['With the supplier', 'idle'], warehouse: ['In the warehouse', 'sky'],
-  packed: ['Packed', 'sky'], on_way: ['On the way', 'live'], ship: ['On the ship', 'ok'],
+  packed: ['Packed', 'sky'], collected: ['With the driver', 'live'], on_way: ['On the way', 'live'], ship: ['On the ship', 'ok'],
 };
+// What a line shows: the driver's tick counts as soon as he makes it
+function shownStage(d, l) {
+  if (l.stage === 'ship') return 'ship';
+  if (isGot(d, l)) return ['on_the_way', 'problem'].includes(d.status) ? 'on_way' : 'collected';
+  return l.stage === 'collected' ? 'warehouse' : l.stage;
+}
 
 const ICON = {
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
@@ -464,7 +482,7 @@ function panelSignature() {
   return JSON.stringify([
     S.mode, S.selected, S.ui, S.join.busy, S.join.error, S.join.preview && S.join.preview.code,
     d && [d.status, d.courierUid, d.courierName, d.courierPhone, (d.events || []).length, d.problem, d.item, d.from,
-      d.address, d.notes, d.destLabel, d.ownerPhone, ms(d.deliveredAt), d.demoDrive, S.pins.get(d.code), d.kind, d.trip && d.trip.ref, JSON.stringify(d.lines || [])],
+      d.address, d.notes, d.destLabel, d.ownerPhone, ms(d.deliveredAt), d.demoDrive, S.pins.get(d.code), d.kind, d.trip && d.trip.ref, JSON.stringify(d.lines || []), JSON.stringify(d.collected || {})],
     !!loc, !!(loc && Date.now() - loc.at > 90 * SEC),
     sh && [sh.code, sh.demo, sh.error, !!sh.lastSent],
   ]);
@@ -565,24 +583,26 @@ const fmtQty = n => (Number.isFinite(+n) ? String(+(+n).toFixed(2)) : String(n |
 function contentsHtml(d) {
   const lines = d.lines || [];
   if (!lines.length) return '';
-  const onTrip = new Set((d.trip && d.trip.lines) || []);
+  const p = progress(d), working = d.courierUid && DRIVER_AT_WORK.includes(d.status);
   return `<section class="card contents">
-    <div class="contents-head"><p class="label">What is in it</p><span class="small muted">${lines.length} ${lines.length === 1 ? 'item' : 'items'}</span></div>
+    <div class="contents-head"><p class="label">What is in it</p><span class="small muted">${working && p.of ? `${p.got} of ${p.of} collected by ${esc(d.courierName || 'the driver')}` : `${lines.length} ${lines.length === 1 ? 'item' : 'items'}`}</span></div>
+    ${working && p.of ? `<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="${p.of}" aria-valuenow="${p.got}"><span style="width:${Math.round((p.got / p.of) * 100)}%"></span></div>` : ''}
     <ul class="lines">${lines.map(l => {
-      const [lab, tone] = LINE_STAGE[l.stage] || ['', 'idle'];
-      return `<li${onTrip.has(l.id) ? ' class="on-trip"' : ''}><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span>${lab ? `<span class="chip tone-${tone}">${lab}</span>` : ''}</li>`;
+      const [lab, tone] = LINE_STAGE[shownStage(d, l)] || ['', 'idle'];
+      return `<li><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span>${lab ? `<span class="chip tone-${tone}">${lab}</span>` : ''}</li>`;
     }).join('')}</ul>
   </section>`;
 }
 function stageNote(d) {
   if (d.kind !== 'order') return '';
   const who = d.courierName || 'The driver';
+  const p = progress(d);
   const text = {
-    at_supplier: 'The company is collecting the order from its suppliers.',
-    in_warehouse: 'Everything is in the warehouse. It goes out when the company sends it.',
+    at_supplier: 'The pieces are with the suppliers. A driver collects them and brings them to you.',
+    in_warehouse: 'Everything is in the warehouse. A driver collects it and brings it to you.',
     waiting: 'Packed and ready. Waiting for a driver to take it.',
-    assigned: `${who} will pick it up from the warehouse. You see them on the map once they set off.`,
-    picked_up: `${who} has it and sets off soon. You see them on the map once they do.`,
+    assigned: `${who} took the job and will collect the pieces. You see each one ticked off here.`,
+    picked_up: p.got >= p.of ? `${who} has every piece. You see them on the map once they set off.` : `${who} is collecting the pieces: ${p.got} of ${p.of} so far.`,
   }[d.status];
   return text ? `<p class="stage-note">${esc(text)}</p>` : '';
 }
@@ -683,9 +703,46 @@ function shareHtml(d) {
   return '';
 }
 
+// The pieces to collect, grouped by where to get them
+function collectListHtml(d, canTick) {
+  const groups = new Map();
+  for (const l of (d.lines || []).filter(x => x.stage !== 'ship')) {
+    const key = l.stage === 'pending' ? 'Not ordered yet' : (l.from && l.from.label) || 'At the warehouse';
+    if (!groups.has(key)) groups.set(key, { from: l.stage === 'pending' ? null : l.from, lines: [] });
+    groups.get(key).lines.push(l);
+  }
+  return [...groups].map(([label, g]) => {
+    const got = g.lines.filter(l => isGot(d, l)).length;
+    const dir = g.from && Number.isFinite(g.from.lat) ? `https://www.google.com/maps/dir/?api=1&destination=${g.from.lat},${g.from.lng}` : '';
+    return `<div class="pickup">
+      <div class="pickup-head"><span><strong>${esc(label)}</strong><span class="small muted"> · ${got} of ${g.lines.length}</span></span>${dir ? `<a class="btn btn-plain small-btn" href="${dir}" target="_blank" rel="noopener">${ICON.nav}Directions</a>` : ''}</div>
+      <ul class="pieces">${g.lines.map(l => {
+        const on = isGot(d, l), able = canTick && l.stage !== 'pending';
+        return `<li><button type="button" class="piece${on ? ' got' : ''}" data-act="piece" data-id="${esc(l.id)}" aria-pressed="${on}" ${able ? '' : 'disabled'}>
+          <span class="box" aria-hidden="true">${ICON.check}</span><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span></button></li>`;
+      }).join('')}</ul></div>`;
+  }).join('');
+}
+function orderCourierHtml(d, check, pinForm, shareBlock) {
+  const p = progress(d), moving = ['on_the_way', 'problem'].includes(d.status), done = d.status === 'delivered';
+  const collecting = !moving && !done && d.status !== 'cancelled';
+  const left = p.of - p.got;
+  return `<ol class="checks" aria-label="Delivery checklist">
+    ${check(true, false, 'Job taken', d.events ? `You took it ${esc(when((d.events.find(e => e.s === 'assigned') || {}).at || Date.now()))}` : '')}
+    ${check(p.of > 0 && p.got >= p.of, collecting, `Collect the pieces · ${p.got} of ${p.of}`,
+      collecting ? (p.got >= p.of ? 'You have every piece.' : 'Tick each piece when it is in your hands. The customer sees it right away.') : `${p.got} of ${p.of} collected`,
+      collectListHtml(d, collecting))}
+    ${check(moving || done, collecting && p.got > 0, 'On my way to the ship',
+      moving ? 'The customer can see you on their map.' : collecting && p.got > 0 ? `Starts sharing your live location.${left > 0 ? ` ${left} ${left === 1 ? 'piece is' : 'pieces are'} not collected yet; they stay for a later trip.` : ''}` : 'Collect at least one piece first.',
+      `<button class="btn btn-primary" type="button" data-act="start">${ICON.nav}On my way</button><button class="btn" type="button" data-act="start-demo">Start a demo drive</button>`)}
+    ${shareBlock ? `<li id="shareSlot">${shareBlock}</li>` : ''}
+    ${check(done, moving, 'Delivered', done ? `Done ${d.deliveredAt ? esc(when(ms(d.deliveredAt))) : ''}` : 'Ask the ship for their PIN when you hand it over.', pinForm)}
+  </ol>`;
+}
+
 function courierHtml(d) {
   const st = statusOf(d);
-  const order = d.kind === 'order', ready = !order || released(d);
+  const order = d.kind === 'order';
   const at = STEP_OF[d.status] ?? 1;
   const check = (done, now, title, sub, act = '') => `<li class="check${done ? ' done' : ''}${now ? ' now' : ''}">
       <span class="box" aria-hidden="true">${ICON.check}</span>
@@ -703,9 +760,8 @@ function courierHtml(d) {
     </form>`;
 
   const finished = FINISHED.has(d.status);
-  const checks = `<ol class="checks" aria-label="Delivery checklist">
+  const checks = order ? orderCourierHtml(d, check, pinForm, shareBlock) : `<ol class="checks" aria-label="Delivery checklist">
     ${check(true, false, 'Job taken', d.events ? `You took it ${esc(when((d.events.find(e => e.s === 'assigned') || {}).at || Date.now()))}` : '')}
-    ${order ? check(ready, !ready, 'Order ready to pick up', ready ? 'Packed at the warehouse' : `Not yet: the order is ${d.status === 'at_supplier' ? 'still with the suppliers' : 'in the warehouse, not packed yet'}. This updates by itself when the company sends it out.`) : ''}
     ${check(at > 1, d.status === 'assigned', 'I have the order', d.status === 'assigned' ? 'Tick this when the parcel is in your hands.' : '', `<button class="btn btn-primary" type="button" data-act="picked">${ICON.check}I have the order</button>`)}
     ${check(['on_the_way', 'problem', 'delivered'].includes(d.status), d.status === 'picked_up', 'On my way', d.status === 'picked_up' ? 'Starts sharing your live location with the customer.' : d.status === 'on_the_way' ? 'The customer can see you on their map.' : '', `<button class="btn btn-primary" type="button" data-act="start">${ICON.nav}Start delivery</button><button class="btn" type="button" data-act="start-demo">Start a demo drive</button>`)}
     ${shareBlock ? `<li id="shareSlot">${shareBlock}</li>` : ''}
@@ -731,9 +787,9 @@ function courierHtml(d) {
     </div>
     ${d.status === 'cancelled' ? '<p class="error">The customer cancelled this delivery.</p>' : ''}
     ${checks}
-    ${contentsHtml(d)}
+    ${order ? '' : contentsHtml(d)}
     <div class="actions">
-      <a class="btn" href="${nav}" target="_blank" rel="noopener">${ICON.nav}Google Maps</a>
+      <a class="btn" href="${nav}" target="_blank" rel="noopener">${ICON.nav}${order ? 'To the ship: Google Maps' : 'Google Maps'}</a>
       <a class="btn" href="${apple}" target="_blank" rel="noopener">${ICON.nav}Apple Maps</a>
       ${d.ownerPhone ? `<a class="btn" href="tel:${esc(d.ownerPhone.replace(/[^+\d]/g, ''))}">${ICON.phone}Call customer</a>` : ''}
     </div>
@@ -1078,12 +1134,10 @@ async function claimJob() {
     renderChrome();
   }
   S.join.busy = true; S.join.error = ''; renderPanel();
-  // An order that is still with the supplier or in the warehouse keeps that stage; the driver waits for it
-  const early = p.kind === 'order' && !released(p);
   try {
     await B.update(p.code, {
       courierUid: S.user.uid, courierName: S.profile.name, courierPhone: S.profile.phone || '',
-      ...(early ? {} : { status: 'assigned' }), updatedAt: B.now(),
+      status: 'assigned', updatedAt: B.now(),
     }, event('assigned', 'courier'));
     S.join = { code: '', preview: null, error: '', busy: false };
     toast(`You took the job: ${p.item}`);
@@ -1211,10 +1265,19 @@ document.addEventListener('click', async e => {
       case 'received': return setStatus(d, 'delivered', 'customer', { deliveredAt: B.now() });
       case 'cancel': return setStatus(d, 'cancelled', 'customer');
       case 'restore': return setStatus(d, d.courierUid ? 'assigned' : 'waiting', 'customer', {}, 'restored');
-      case 'unassign': return setStatus(d, d.kind === 'order' && !released(d) ? d.status : 'waiting', 'customer', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'unassigned');
+      case 'unassign': return setStatus(d, d.kind === 'order' ? restStatus(d) : 'waiting', 'customer', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null, ...(d.kind === 'order' ? { collected: {} } : {}) }, 'unassigned');
       case 'delete': return deleteWithUndo(d);
       case 'claim': return claimJob();
       case 'picked': return setStatus(d, 'picked_up', 'courier');
+      case 'piece': {
+        // The driver ticks (or unticks) one piece; the first tick means he started collecting
+        const line = (d.lines || []).find(l => l.id === t.dataset.id);
+        if (!line || !B.deleteField) return;
+        const on = isGot(d, line);
+        const fields = { [`collected.${line.id}`]: on ? B.deleteField() : Date.now(), updatedAt: B.now() };
+        if (!on && d.status !== 'picked_up') fields.status = 'picked_up';
+        return B.update(d.code, fields, on ? null : event('collected', 'courier', { note: `${fmtQty(line.qty)} ${line.unit || ''} ${line.desc}${line.from && line.from.label ? `, from ${line.from.label}` : ''}`.replace(/\s+/g, ' ') }));
+      }
       case 'start': await setStatus(d, 'on_the_way', 'courier', { demoDrive: false }); return startSharing(d);
       case 'start-demo': await setStatus(d, 'on_the_way', 'courier', { demoDrive: true }); return startSharing(d, { demo: true });
       case 'share-gps': return startSharing(d);
@@ -1225,7 +1288,7 @@ document.addEventListener('click', async e => {
       case 'resolved': return setStatus(d, d.courierLoc ? 'on_the_way' : 'picked_up', 'courier', { problem: '' });
       case 'give-back':
         if (S.sharing && S.sharing.code === d.code) stopSharing();
-        await setStatus(d, d.kind === 'order' && !released(d) ? d.status : 'waiting', 'courier', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'returned');
+        await setStatus(d, d.kind === 'order' ? restStatus(d) : 'waiting', 'courier', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null, ...(d.kind === 'order' ? { collected: {} } : {}) }, 'returned');
         return toast('You gave the job back.');
       case 'hide-job': {
         const key = `pt.hiddenJobs.${S.user.uid}`;

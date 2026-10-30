@@ -228,6 +228,21 @@ p { margin: 0; }
 .lines .qty { color: var(--muted); font-size: 12.5px; }
 .lines .what { font-weight: 600; overflow-wrap: anywhere; }
 .lines .on-trip .what::after { content: " · on this trip"; color: var(--muted); font-weight: 500; font-size: 12px; }
+.meter { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s ease; }
+.pickup { display: flex; flex-direction: column; gap: 6px; padding: 10px 0 2px; border-top: 1px solid var(--line); }
+.pickup:first-child { border-top: 0; padding-top: 0; }
+.pickup-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.small-btn { padding: 6px 10px; font-size: 13px; min-height: 0; }
+.pieces { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.piece { width: 100%; display: grid; grid-template-columns: 28px 64px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; padding: 10px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--panel); color: var(--text); font: inherit; font-size: 14.5px; cursor: pointer; }
+.piece .box { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; border: 2px solid var(--line-2); color: transparent; }
+.piece .box svg { width: 16px; height: 16px; }
+.piece .qty { color: var(--muted); font-size: 12.5px; }
+.piece .what { font-weight: 600; overflow-wrap: anywhere; }
+.piece.got { border-color: rgba(76, 211, 138, .45); background: var(--ok-soft); }
+.piece.got .box { background: var(--ok); border-color: var(--ok); color: #06210F; }
+.piece:disabled { opacity: .55; cursor: default; }
 .chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; background: var(--tone-soft); color: var(--tone); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
 @media (max-width: 420px) { .lines li { grid-template-columns: 64px minmax(0, 1fr); } .lines .chip { grid-column: 2; justify-self: start; } }
 
@@ -385,6 +400,6 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
 <div class="toast" id="toast" role="status" hidden><span id="toastText"></span><button type="button" id="toastAction" hidden></button></div>
 <p class="banner" id="testBanner" hidden>Test mode · local emulators</p>
 
-<script type="module" src="app.js?v=20261031a"></script>
+<script type="module" src="app.js?v=20261031b"></script>
 </body>
 </html>

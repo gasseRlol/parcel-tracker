@@ -16,10 +16,13 @@ How a delivery goes:
 
 1. As soon as something is ordered from a supplier, the company's system sends the order to the tracker and gets back a **tracking code**, a **handover PIN** and two links.
 2. Each time an item moves (received in the warehouse, packed, delivered), the system sends the new stages.
-3. When a delivery note is packed and sent out, the system marks it **released**. The tracker shows "Packed, waiting for a driver".
-4. The driver opens the **driver link** on his phone, types his name and takes the job. He taps "I have the order", then "On my way": only then does his phone start sharing its location, and the customer and the company see him move on the map.
-5. At the ship, the customer reads the **PIN** to the driver, who types it in. A wrong PIN is refused.
-6. The tracker tells the company's system each change, so its delivery note moves to "On the way" and "Delivered" (who received it, when) by itself. If only part of the order went, the tracker goes back to the stage of the rest.
+3. The driver opens the **driver link** on his phone, types his name and takes the job. He can start as soon as the order is placed.
+4. His screen is a **checklist of the pieces**, grouped by where to pick each one up: the supplier's address while a piece is still there, or the company's warehouse once it arrived, with directions to each place. He ticks every piece as it comes into his hands; the customer and the company see "3 of 5 collected" and each piece marked "With the driver" right away.
+5. He taps **On my way**: only then does his phone share its location, and everyone sees him move on the map. The pieces he has go on a delivery note in the company's system by themselves.
+6. At the ship, the customer reads the **PIN** to the driver, who types it in. A wrong PIN is refused.
+7. The tracker tells the company's system each change, so the delivery note moves to "Delivered" (who received it, when) by itself. Pieces he didn't collect stay open: he keeps the job and does another run for them.
+
+The company can also pack a delivery note itself and **release** it ("Packed, waiting for a driver"); its pieces then show as packed at the warehouse on the driver's list.
 
 ## The messages
 
