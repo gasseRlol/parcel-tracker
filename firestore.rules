@@ -79,5 +79,33 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/deliveries/$(code)).data.ownerUid == me();
       }
     }
+
+    // Test rooms (rooms/{room}/...): for trying the app with other people, no sign-in.
+    // Anyone with a room's link can use that room; room codes are long and random, and
+    // nothing private is stored there. Writes are checked for shape and size only.
+    function roomOk(room) { return room.matches('^[A-Z0-9]{10,24}$'); }
+    function roomDeliveryOk() {
+      return request.resource.data.keys().size() <= 40
+        && text(request.resource.data.item, 120) && request.resource.data.item.size() > 0
+        && request.resource.data.dest.lat is number && request.resource.data.dest.lng is number
+        && (!('lines' in request.resource.data) || (request.resource.data.lines is list && request.resource.data.lines.size() <= 200))
+        && (!('events' in request.resource.data) || (request.resource.data.events is list && request.resource.data.events.size() <= 300))
+        && request.resource.data.status in ['at_supplier', 'in_warehouse', 'waiting', 'assigned', 'picked_up', 'on_the_way', 'problem', 'delivered', 'cancelled'];
+    }
+    match /rooms/{room}/deliveries/{code} {
+      function roomPin() { return get(/databases/$(database)/documents/rooms/$(room)/pins/$(code)).data.pin; }
+      allow get, list: if roomOk(room);
+      allow create: if roomOk(room) && code.matches('^[2-9A-HJKMNP-Z]{8}$') && roomDeliveryOk();
+      // Marking it delivered needs the customer's PIN
+      allow update: if roomOk(room) && roomDeliveryOk()
+        && (request.resource.data.status != 'delivered' || resource.data.status == 'delivered'
+            || request.resource.data.handoffPin == roomPin());
+      allow delete: if roomOk(room);
+    }
+    match /rooms/{room}/pins/{code} {
+      allow get, delete: if roomOk(room);
+      allow create, update: if roomOk(room)
+        && request.resource.data.keys().hasOnly(['pin']) && request.resource.data.pin.matches('^[0-9]{4}$');
+    }
   }
 }

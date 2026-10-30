@@ -11,14 +11,26 @@ const store = {
 };
 const SEC = 1000, MIN = 60 * SEC;
 
-// ---------- Live or demo ----------
-// ?demo in the link (or the "Try the demo" button) opens the demo, which needs no account
-if (new URLSearchParams(location.search).has('demo')) store.set('pt.demo', true);
-const B = store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261030b') : await import('./backend-firebase.js?v=20261030b');
+// ---------- Live, demo or test room ----------
+// ?demo (or the "Try the demo" button) opens the demo on this device only. ?room=CODE opens a test
+// room: the same deliveries online for everyone who has the link, no account needed.
+const params = new URLSearchParams(location.search);
+if (params.has('room')) { store.set('pt.room', params.get('room')); store.set('pt.demo', false); }
+else if (params.has('demo')) { store.set('pt.demo', true); store.set('pt.room', null); }
+const ROOM_ID = store.get('pt.room', null);
+const B = ROOM_ID ? await import('./backend-room.js?v=20261031a')
+  : store.get('pt.demo', false) ? await import('./backend-demo.js?v=20261031a') : await import('./backend-firebase.js?v=20261031a');
+if (ROOM_ID) { try { B.useRoom(ROOM_ID); } catch { store.set('pt.room', null); location.replace(location.pathname); } }
 const DEMO = B.kind === 'demo';
+const ROOM = B.kind === 'room';
 if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
-$('#demoBtn').addEventListener('click', () => { store.set('pt.demo', true); location.href = `${location.pathname}?demo`; });
+$('#demoBtn').addEventListener('click', () => { store.set('pt.demo', true); store.set('pt.room', null); location.href = `${location.pathname}?demo`; });
+if (ROOM) {
+  $('#testBanner').textContent = `Test room ${B.room()} · everyone with the link sees the same`;
+  $('#testBanner').hidden = false;
+  document.querySelector('[data-menu="signout"] span').textContent = 'Leave the test room';
+}
 if (DEMO) {
   $('#testBanner').textContent = 'Demo · everything stays on this device';
   $('#testBanner').hidden = false;
@@ -28,6 +40,8 @@ if (DEMO) {
 
 // ---------- Words ----------
 const STATUS = {
+  at_supplier:  { label: 'With the supplier', short: 'With the supplier', tone: 'idle' },
+  in_warehouse: { label: 'In the warehouse', short: 'In the warehouse', tone: 'sky' },
   waiting:    { label: 'Waiting for a courier', short: 'No courier yet', tone: 'idle' },
   assigned:   { label: 'Courier assigned', short: 'Courier assigned', tone: 'sky' },
   picked_up:  { label: 'Picked up', short: 'Picked up', tone: 'sky' },
@@ -36,7 +50,7 @@ const STATUS = {
   problem:    { label: 'Problem reported', short: 'Problem', tone: 'bad' },
   cancelled:  { label: 'Cancelled', short: 'Cancelled', tone: 'idle' },
 };
-const STEP_OF = { waiting: 0, assigned: 1, picked_up: 2, on_the_way: 3, problem: 3, delivered: 4, cancelled: -1 };
+const STEP_OF = { at_supplier: 0, in_warehouse: 0, waiting: 0, assigned: 1, picked_up: 2, on_the_way: 3, problem: 3, delivered: 4, cancelled: -1 };
 const STEPS = ['Added', 'Courier', 'Picked up', 'On the way', 'Delivered'];
 const FINISHED = new Set(['delivered', 'cancelled']);
 const EVENT_TEXT = {
@@ -50,6 +64,27 @@ const EVENT_TEXT = {
   unassigned: 'Courier removed',
   returned: 'Courier gave the job back',
   restored: 'Delivery restored',
+  at_supplier: 'Ordered from the suppliers',
+  in_warehouse: 'Everything is in the warehouse',
+  released: 'Packed and ready to go out',
+  part_delivered: 'Part of the order is on the ship',
+  trip_cancelled: 'Trip called off',
+};
+// Orders a company sends (Quayside): the same statuses, worded for a delivery to a ship, in three stages
+const ORDER_LABEL = {
+  waiting: 'Packed, waiting for a driver', assigned: 'Driver ready to pick it up', picked_up: 'The driver has it',
+  on_the_way: 'On the way to the ship', delivered: 'On the ship',
+};
+const statusOf = d => {
+  const st = STATUS[d.status] || STATUS.waiting;
+  return d.kind === 'order' && ORDER_LABEL[d.status] ? { ...st, label: ORDER_LABEL[d.status], short: ORDER_LABEL[d.status] } : st;
+};
+const ORDER_STEPS = ['With the supplier', 'In the warehouse', 'On the ship'];
+const orderStage = d => (d.status === 'delivered' ? 3 : d.status === 'at_supplier' ? 0 : d.status === 'in_warehouse' ? 1 : 2);
+const released = d => !['at_supplier', 'in_warehouse'].includes(d.status);
+const LINE_STAGE = {
+  pending: ['Not ordered yet', 'idle'], supplier: ['With the supplier', 'idle'], warehouse: ['In the warehouse', 'sky'],
+  packed: ['Packed', 'sky'], on_way: ['On the way', 'live'], ship: ['On the ship', 'ok'],
 };
 
 const ICON = {
@@ -135,7 +170,9 @@ const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 const randomCode = () => Array.from(crypto.getRandomValues(new Uint32Array(8)), n => ALPHABET[n % ALPHABET.length]).join('');
 const randomPin = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0');
 const cleanCode = s => String(s || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
-const shareUrl = code => `${location.origin}${location.pathname}${location.search}#join/${code}`;
+const shareUrl = code => (ROOM
+  ? `${location.origin}${location.pathname}?room=${B.room()}${B.testMode ? '&emu' : ''}#join/${code}`
+  : `${location.origin}${location.pathname}${location.search}#join/${code}`);
 const event = (s, by, extra = {}) => ({ s, at: Date.now(), by, ...extra });
 
 // ---------- Toast and alerts ----------
@@ -300,7 +337,7 @@ function onData(which) {
     if (first || !prev || prev === d.status) continue;
     const last = d.events && d.events[d.events.length - 1];
     if (last && last.by === (which === 'mine' ? 'customer' : 'courier')) continue; // only news from the other side
-    alertUser(`${d.item}: ${STATUS[d.status] ? STATUS[d.status].label : d.status}`);
+    alertUser(`${d.item}: ${statusOf(d).label}`);
   }
   if (which === (S.mode === 'customer' ? 'mine' : 'jobs')) {
     if (first && !S.selected) {
@@ -380,7 +417,7 @@ function renderTabs() {
     const tone = toneOf(d);
     const selected = sel && sel.kind === 'delivery' && sel.code === d.code;
     const cls = ['tab', `tone-${tone}`, d.status === 'on_the_way' ? 'live' : '', FINISHED.has(d.status) ? 'done' : ''].join(' ');
-    return `<button class="${cls}" type="button" role="tab" aria-selected="${selected}" data-open="${esc(d.code)}" title="${esc(d.item)}: ${esc(STATUS[d.status] ? STATUS[d.status].short : '')}"><span class="dot"></span><span class="name">${esc(d.item)}</span></button>`;
+    return `<button class="${cls}" type="button" role="tab" aria-selected="${selected}" data-open="${esc(d.code)}" title="${esc(d.item)}: ${esc(statusOf(d).short)}"><span class="dot"></span><span class="name">${esc(d.item)}</span></button>`;
   });
   const addSel = sel && (S.mode === 'customer' ? sel.kind === 'new' : sel.kind === 'join');
   items.push(S.mode === 'customer'
@@ -427,7 +464,7 @@ function panelSignature() {
   return JSON.stringify([
     S.mode, S.selected, S.ui, S.join.busy, S.join.error, S.join.preview && S.join.preview.code,
     d && [d.status, d.courierUid, d.courierName, d.courierPhone, (d.events || []).length, d.problem, d.item, d.from,
-      d.address, d.notes, d.destLabel, d.ownerPhone, ms(d.deliveredAt), d.demoDrive, S.pins.get(d.code)],
+      d.address, d.notes, d.destLabel, d.ownerPhone, ms(d.deliveredAt), d.demoDrive, S.pins.get(d.code), d.kind, d.trip && d.trip.ref, JSON.stringify(d.lines || [])],
     !!loc, !!(loc && Date.now() - loc.at > 90 * SEC),
     sh && [sh.code, sh.demo, sh.error, !!sh.lastSent],
   ]);
@@ -469,6 +506,14 @@ function emptyHtml() {
 }
 
 function stepsHtml(d) {
+  if (d.kind === 'order') {
+    const at = orderStage(d);
+    return `<ol class="steps three tone-${toneOf(d)}" aria-label="Where the order is">${ORDER_STEPS.map((label, i) => {
+      const cls = at === 3 ? (i < 2 ? 'done' : 'now') : i < at ? 'done' : i === at ? 'now' : '';
+      const sub = i === 2 && at === 2 ? `<span class="sub">${esc(statusOf(d).label)}</span>` : '';
+      return `<li class="${cls}"${i === Math.min(at, 2) ? ' aria-current="step"' : ''}><span class="node"></span><span>${label}</span>${sub}</li>`;
+    }).join('')}</ol>`;
+  }
   const at = STEP_OF[d.status] ?? 0;
   const tone = toneOf(d);
   return `<ol class="steps tone-${tone}" aria-label="Progress">${STEPS.map((label, i) => {
@@ -512,15 +557,42 @@ function timelineHtml(d) {
   if (!evs.length) return '';
   return `<section class="head"><p class="label">History</p><ol class="timeline">${evs.map(e => `
     <li><time datetime="${new Date(e.at).toISOString()}">${esc(when(e.at))}</time><span class="rail" aria-hidden="true"></span>
-    <div><strong>${esc(EVENT_TEXT[e.kind] || EVENT_TEXT[e.s] || e.s)}</strong>${e.note ? `<p class="small muted">${esc(e.note)}</p>` : ''}<p class="small muted">${e.by === 'courier' ? 'By the courier' : 'By the customer'}</p></div></li>`).join('')}</ol></section>`;
+    <div><strong>${esc(EVENT_TEXT[e.kind] || EVENT_TEXT[e.s] || e.s)}</strong>${e.note ? `<p class="small muted">${esc(e.note)}</p>` : ''}<p class="small muted">${e.by === 'courier' ? (d.kind === 'order' ? 'By the driver' : 'By the courier') : e.by === 'company' ? `By ${esc(d.from || 'the company')}` : 'By the customer'}</p></div></li>`).join('')}</ol></section>`;
+}
+
+// What is in an order, line by line, and where each line is
+const fmtQty = n => (Number.isFinite(+n) ? String(+(+n).toFixed(2)) : String(n || ''));
+function contentsHtml(d) {
+  const lines = d.lines || [];
+  if (!lines.length) return '';
+  const onTrip = new Set((d.trip && d.trip.lines) || []);
+  return `<section class="card contents">
+    <div class="contents-head"><p class="label">What is in it</p><span class="small muted">${lines.length} ${lines.length === 1 ? 'item' : 'items'}</span></div>
+    <ul class="lines">${lines.map(l => {
+      const [lab, tone] = LINE_STAGE[l.stage] || ['', 'idle'];
+      return `<li${onTrip.has(l.id) ? ' class="on-trip"' : ''}><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span>${lab ? `<span class="chip tone-${tone}">${lab}</span>` : ''}</li>`;
+    }).join('')}</ul>
+  </section>`;
+}
+function stageNote(d) {
+  if (d.kind !== 'order') return '';
+  const who = d.courierName || 'The driver';
+  const text = {
+    at_supplier: 'The company is collecting the order from its suppliers.',
+    in_warehouse: 'Everything is in the warehouse. It goes out when the company sends it.',
+    waiting: 'Packed and ready. Waiting for a driver to take it.',
+    assigned: `${who} will pick it up from the warehouse. You see them on the map once they set off.`,
+    picked_up: `${who} has it and sets off soon. You see them on the map once they do.`,
+  }[d.status];
+  return text ? `<p class="stage-note">${esc(text)}</p>` : '';
 }
 
 function factsHtml(d, forCourier) {
   const rows = [
     ['Deliver to', d.destLabel || `${d.dest.lat.toFixed(5)}, ${d.dest.lng.toFixed(5)}`, true],
+    forCourier && d.pickup ? ['Pick it up at', d.pickup.label, true] : null,
     d.address ? ['Address details', d.address, true] : null,
     d.notes ? ['Notes for the courier', d.notes, true] : null,
-    d.lines && d.lines.length ? ['In this delivery', d.lines.map(l => `${l.qty} ${l.unit} ${l.desc}`).join(' · '), true] : null,
     d.from ? ['From', d.source && d.source.ref ? `${d.from} (${d.source.ref})` : d.from] : null,
     d.receivedBy && d.status === 'delivered' ? ['Received by', d.receivedBy] : null,
     ['Added', when(ms(d.createdAt) || Date.now())],
@@ -532,7 +604,8 @@ function factsHtml(d, forCourier) {
 function armed(key, label, armedLabel) { return S.ui.armed === key ? armedLabel : label; }
 
 function customerHtml(d) {
-  const st = STATUS[d.status] || STATUS.waiting;
+  const st = statusOf(d);
+  const order = d.kind === 'order';
   const loc = liveLocation(d);
   const pin = S.pins.get(d.code);
   const finished = FINISHED.has(d.status);
@@ -540,10 +613,12 @@ function customerHtml(d) {
     ? `<div class="card"><div class="card-row"><span class="face" aria-hidden="true">${esc(initials(d.courierName))}</span><div><strong>${esc(d.courierName || 'Your courier')}</strong><p class="small muted">Your courier${d.courierPhone ? ` · <span class="mono">${esc(d.courierPhone)}</span>` : ''}</p></div>
         ${d.courierPhone ? `<a class="btn" href="tel:${esc(d.courierPhone.replace(/[^+\d]/g, ''))}">${ICON.phone}Call</a>` : ''}</div></div>`
     : finished ? '' : `<div class="card">
-        <p class="label">Send this code to your courier</p>
+        <p class="label">${order ? 'Send this link to the driver' : 'Send this code to your courier'}</p>
         <div class="code" aria-label="Delivery code ${esc(d.code.split('').join(' '))}">${esc(d.code)}</div>
-        <div class="actions"><button class="btn btn-primary" type="button" data-act="share-code">${ICON.share}Share link</button><button class="btn" type="button" data-act="copy-code">${ICON.copy}Copy code</button></div>
-        <p class="small muted">They open the link, sign in as a courier, and take the job. Then you can watch them on the map.</p>
+        <div class="actions"><button class="btn btn-primary" type="button" data-act="share-code">${ICON.share}Share link</button><button class="btn" type="button" data-act="${ROOM ? 'copy-link' : 'copy-code'}">${ICON.copy}${ROOM ? 'Copy link' : 'Copy code'}</button></div>
+        <p class="small muted">${ROOM
+          ? 'They open the link on their phone, type their name and take the job. When they press "On my way", you see them moving on the map.'
+          : 'They open the link, sign in as a courier, and take the job. Then you can watch them on the map.'}</p>
         ${DEMO ? `<p class="small" style="color: var(--sky)">Demo: be the courier yourself. Switch to <strong>Courier</strong> at the top, tap <strong>Take a job</strong> and type <span class="mono">${esc(d.code)}</span>.</p>` : ''}
       </div>`;
   const pinCard = !finished ? `<div class="card">
@@ -553,7 +628,9 @@ function customerHtml(d) {
     </div>` : '';
   const problem = d.status === 'problem' && d.problem ? `<div class="card tone-bad" style="border-color: rgba(255,107,94,.45)"><p class="label" style="color: var(--bad)">The courier reported a problem</p><p>${esc(d.problem)}</p></div>` : '';
   const actions = [];
-  if (!finished) {
+  if (!finished && order) {
+    if (d.courierUid) actions.push(`<button class="btn btn-plain" type="button" data-act="unassign">${armed('unassign', 'Remove the driver', 'Tap again to remove')}</button>`);
+  } else if (!finished) {
     actions.push(`<button class="btn" type="button" data-act="edit">Edit details</button>`);
     actions.push(`<button class="btn btn-ok" type="button" data-act="received">${ICON.check}I got it</button>`);
     if (d.courierUid) actions.push(`<button class="btn btn-plain" type="button" data-act="unassign">${armed('unassign', 'Remove the courier', 'Tap again to remove')}</button>`);
@@ -573,8 +650,11 @@ function customerHtml(d) {
     ${d.status === 'delivered' ? `<div class="card" style="border-color: rgba(76,211,138,.45)"><p class="label" style="color: var(--ok)">Delivered</p><p>${d.deliveredAt ? esc(when(ms(d.deliveredAt))) : 'Done'}${d.courierName ? ` by ${esc(d.courierName)}` : ''}.</p></div>` : ''}
     ${problem}
     ${d.status !== 'cancelled' ? stepsHtml(d) : ''}
+    ${stageNote(d)}
+    ${order ? contentsHtml(d) : ''}
     ${courier}
     ${pinCard}
+    ${order ? '' : contentsHtml(d)}
     ${factsHtml(d, false)}
     <div class="actions">${actions.join('')}</div>
     <hr>
@@ -604,7 +684,8 @@ function shareHtml(d) {
 }
 
 function courierHtml(d) {
-  const st = STATUS[d.status] || STATUS.waiting;
+  const st = statusOf(d);
+  const order = d.kind === 'order', ready = !order || released(d);
   const at = STEP_OF[d.status] ?? 1;
   const check = (done, now, title, sub, act = '') => `<li class="check${done ? ' done' : ''}${now ? ' now' : ''}">
       <span class="box" aria-hidden="true">${ICON.check}</span>
@@ -624,6 +705,7 @@ function courierHtml(d) {
   const finished = FINISHED.has(d.status);
   const checks = `<ol class="checks" aria-label="Delivery checklist">
     ${check(true, false, 'Job taken', d.events ? `You took it ${esc(when((d.events.find(e => e.s === 'assigned') || {}).at || Date.now()))}` : '')}
+    ${order ? check(ready, !ready, 'Order ready to pick up', ready ? 'Packed at the warehouse' : `Not yet: the order is ${d.status === 'at_supplier' ? 'still with the suppliers' : 'in the warehouse, not packed yet'}. This updates by itself when the company sends it out.`) : ''}
     ${check(at > 1, d.status === 'assigned', 'I have the order', d.status === 'assigned' ? 'Tick this when the parcel is in your hands.' : '', `<button class="btn btn-primary" type="button" data-act="picked">${ICON.check}I have the order</button>`)}
     ${check(['on_the_way', 'problem', 'delivered'].includes(d.status), d.status === 'picked_up', 'On my way', d.status === 'picked_up' ? 'Starts sharing your live location with the customer.' : d.status === 'on_the_way' ? 'The customer can see you on their map.' : '', `<button class="btn btn-primary" type="button" data-act="start">${ICON.nav}Start delivery</button><button class="btn" type="button" data-act="start-demo">Start a demo drive</button>`)}
     ${shareBlock ? `<li id="shareSlot">${shareBlock}</li>` : ''}
@@ -649,6 +731,7 @@ function courierHtml(d) {
     </div>
     ${d.status === 'cancelled' ? '<p class="error">The customer cancelled this delivery.</p>' : ''}
     ${checks}
+    ${contentsHtml(d)}
     <div class="actions">
       <a class="btn" href="${nav}" target="_blank" rel="noopener">${ICON.nav}Google Maps</a>
       <a class="btn" href="${apple}" target="_blank" rel="noopener">${ICON.nav}Apple Maps</a>
@@ -677,6 +760,9 @@ function joinHtml() {
       <p class="label">Job ${esc(p.code)}</p>
       <strong style="font-size: 20px">${esc(p.item)}</strong>
       ${factsHtml(p, true)}
+      ${contentsHtml(p)}
+      ${ROOM ? `<div class="field"><label for="joinName">Your name</label><input id="joinName" maxlength="60" autocomplete="name" placeholder="The company and the customer see it" value="${esc(S.profile && S.profile.name !== 'Guest' ? S.profile.name : '')}"></div>
+      <div class="field"><label for="joinPhone">Your phone (optional)</label><input id="joinPhone" type="tel" maxlength="30" autocomplete="tel" value="${esc((S.profile && S.profile.phone) || '')}"></div>` : ''}
       <button class="btn btn-primary" type="button" data-act="claim" ${j.busy ? 'disabled' : ''}>${ICON.check}Take this job</button>
     </div>` : ''}`;
 }
@@ -983,11 +1069,21 @@ async function findJob(raw) {
 async function claimJob() {
   const p = S.join.preview;
   if (!p) return;
-  S.join.busy = true; renderPanel();
+  if (ROOM) {
+    // In a test room there are no accounts: the driver just says who he is
+    const name = (($('#joinName') || {}).value || '').trim();
+    if (!name) { S.join.error = 'Type your name first, so they know who is delivering.'; renderPanel(); return; }
+    S.profile = { ...S.profile, name: name.slice(0, 60), phone: (($('#joinPhone') || {}).value || '').trim().slice(0, 30), role: 'courier', updatedAt: B.now() };
+    await B.saveProfile(S.user.uid, S.profile);
+    renderChrome();
+  }
+  S.join.busy = true; S.join.error = ''; renderPanel();
+  // An order that is still with the supplier or in the warehouse keeps that stage; the driver waits for it
+  const early = p.kind === 'order' && !released(p);
   try {
     await B.update(p.code, {
       courierUid: S.user.uid, courierName: S.profile.name, courierPhone: S.profile.phone || '',
-      status: 'assigned', updatedAt: B.now(),
+      ...(early ? {} : { status: 'assigned' }), updatedAt: B.now(),
     }, event('assigned', 'courier'));
     S.join = { code: '', preview: null, error: '', busy: false };
     toast(`You took the job: ${p.item}`);
@@ -1111,10 +1207,11 @@ document.addEventListener('click', async e => {
       case 'search': { const q = $('#fSearch').value.trim(); if (q) searchPlaces(q); return; }
       case 'share-code': return shareCode(d);
       case 'copy-code': return copyText(d.code, 'Code copied');
+      case 'copy-link': return copyText(shareUrl(d.code), 'Link copied. Send it to the driver.');
       case 'received': return setStatus(d, 'delivered', 'customer', { deliveredAt: B.now() });
       case 'cancel': return setStatus(d, 'cancelled', 'customer');
       case 'restore': return setStatus(d, d.courierUid ? 'assigned' : 'waiting', 'customer', {}, 'restored');
-      case 'unassign': return setStatus(d, 'waiting', 'customer', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'unassigned');
+      case 'unassign': return setStatus(d, d.kind === 'order' && !released(d) ? d.status : 'waiting', 'customer', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'unassigned');
       case 'delete': return deleteWithUndo(d);
       case 'claim': return claimJob();
       case 'picked': return setStatus(d, 'picked_up', 'courier');
@@ -1128,7 +1225,7 @@ document.addEventListener('click', async e => {
       case 'resolved': return setStatus(d, d.courierLoc ? 'on_the_way' : 'picked_up', 'courier', { problem: '' });
       case 'give-back':
         if (S.sharing && S.sharing.code === d.code) stopSharing();
-        await setStatus(d, 'waiting', 'courier', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'returned');
+        await setStatus(d, d.kind === 'order' && !released(d) ? d.status : 'waiting', 'courier', { courierUid: null, courierName: '', courierPhone: '', courierLoc: null }, 'returned');
         return toast('You gave the job back.');
       case 'hide-job': {
         const key = `pt.hiddenJobs.${S.user.uid}`;
@@ -1225,6 +1322,7 @@ async function menuAction(what) {
   closeMenu();
   if (what === 'signout') {
     if (S.sharing) stopSharing();
+    if (ROOM) { store.set('pt.room', null); location.href = location.pathname; return; }
     if (DEMO) { store.set('pt.demo', false); location.href = location.pathname; return; }
     return B.signOutUser();
   }
