@@ -587,9 +587,11 @@ function contentsHtml(d) {
   return `<section class="card contents">
     <div class="contents-head"><p class="label">What is in it</p><span class="small muted">${working && p.of ? `${p.got} of ${p.of} collected by ${esc(d.courierName || 'the driver')}` : `${lines.length} ${lines.length === 1 ? 'item' : 'items'}`}</span></div>
     ${working && p.of ? `<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="${p.of}" aria-valuenow="${p.got}"><span style="width:${Math.round((p.got / p.of) * 100)}%"></span></div>` : ''}
-    <ul class="lines">${lines.map(l => {
+    <ul class="lines">${lines.map((l, i) => {
       const [lab, tone] = LINE_STAGE[shownStage(d, l)] || ['', 'idle'];
-      return `<li><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span>${lab ? `<span class="chip tone-${tone}">${lab}</span>` : ''}</li>`;
+      // Orders from a company come in several orders (one per supplier): a small heading for each
+      const head = l.group && l.group !== (lines[i - 1] || {}).group ? `<li class="group-head">${esc(l.group)} <span>${lines.filter(x => x.group === l.group).length}</span></li>` : '';
+      return `${head}<li><span class="qty mono">${esc(fmtQty(l.qty))} ${esc(l.unit || '')}</span><span class="what">${esc(l.desc)}</span>${lab ? `<span class="chip tone-${tone}">${lab}</span>` : ''}</li>`;
     }).join('')}</ul>
   </section>`;
 }
