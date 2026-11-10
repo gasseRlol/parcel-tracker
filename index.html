@@ -308,6 +308,9 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
 .toast { position: fixed; left: 50%; top: calc(var(--safe-top) + 120px); transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 14px; max-width: calc(100% - 32px); padding: 12px 14px 12px 16px; border-radius: 14px; background: var(--text); color: var(--space); font-weight: 600; font-size: 14.5px; box-shadow: 0 16px 30px rgba(0,0,0,.5); }
 .toast button { border: 0; background: none; color: var(--space); font-weight: 800; text-decoration: underline; text-underline-offset: 3px; min-height: 36px; padding: 0 4px; }
 .banner { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 6px); transform: translateX(-50%); z-index: 8; padding: 4px 10px; border-radius: 8px; background: var(--sky); color: #06101F; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; pointer-events: none; }
+.banner { white-space: nowrap; max-width: calc(100vw - 24px); overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { .banner-more { display: none; } }
+body:has(#testBanner:not([hidden])) .panel-body { padding-bottom: calc(52px + var(--safe-bottom)); }
 </style>
 </head>
 <body>
@@ -403,6 +406,6 @@ dialog h2 { margin: 0; font: 800 22px var(--font); font-stretch: 110%; }
 <div class="toast" id="toast" role="status" hidden><span id="toastText"></span><button type="button" id="toastAction" hidden></button></div>
 <p class="banner" id="testBanner" hidden>Test mode · local emulators</p>
 
-<script type="module" src="app.js?v=20261109a"></script>
+<script type="module" src="app.js?v=20261110a"></script>
 </body>
 </html>

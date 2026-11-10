@@ -27,7 +27,9 @@ if (B.testMode) $('#testBanner').hidden = false;
 if (B.testMode || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) queueMicrotask(() => { window.__pt = { globe, S, B }; });
 $('#demoBtn').addEventListener('click', () => { store.set('pt.demo', true); store.set('pt.room', null); location.href = `${location.pathname}?demo`; });
 if (ROOM) {
-  $('#testBanner').textContent = `Test room ${B.room()} · everyone with the link sees the same`;
+  // One short line on a phone, so it never covers the buttons
+  $('#testBanner').textContent = `Test room ${B.room()}`;
+  $('#testBanner').append(Object.assign(document.createElement('span'), { className: 'banner-more', textContent: ' · everyone with the link sees the same' }));
   $('#testBanner').hidden = false;
   document.querySelector('[data-menu="signout"] span').textContent = 'Leave the test room';
 }
