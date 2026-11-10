@@ -131,8 +131,12 @@ export const isPretending = code => sims.has(code);
 // trip: { origin: { lat, lng }, roadTo?: { lat, lng }, sea?: [{ lat, lng }], courierName, receiver }
 export async function pretendDriver(code, trip) {
   const d = T.get(code);
-  if (!d || ['delivered', 'cancelled', 'on_the_way'].includes(d.status) || sims.has(code)) return false;
-  if (!(d.lines || []).some(l => !['pending', 'ship'].includes(l.stage))) return false;
+  if (!d || sims.has(code)) return false;
+  // A pretend drive whose page was closed carries on from where it would be now
+  const setOff = (d.events || []).filter(e => e.s === 'on_the_way').at(-1)?.at;
+  const resume = d.status === 'on_the_way' && d.courierUid === PRETEND && !!setOff;
+  if (!resume && ['delivered', 'cancelled', 'on_the_way'].includes(d.status)) return false;
+  if (!resume && !(d.lines || []).some(l => !['pending', 'ship'].includes(l.stage))) return false;
   sims.set(code, 0);
   const roadEnd = trip.roadTo || d.dest;
   let c = await road(trip.origin, roadEnd);
@@ -142,21 +146,23 @@ export async function pretendDriver(code, trip) {
   c = c.filter((p, i) => !i || p[0] !== c[i - 1][0] || p[1] !== c[i - 1][1]);
   const total = c.reduce((s, p, i) => (i ? s + meters(c[i - 1], p) : 0), 0);
   const speed = Math.max(12, total / 150);
-  const t0 = Date.now();
-  const open = (d.lines || []).filter(l => !['pending', 'ship'].includes(l.stage));
-  const ticks = {};
-  for (const l of open) if (!(d.collected && d.collected[l.id])) ticks[`collected.${l.id}`] = t0;
-  const evs = [];
-  if (!d.courierUid) evs.push({ s: 'assigned', at: t0, by: 'courier' });
-  for (const l of open) if (!(d.collected && d.collected[l.id])) evs.push({ s: 'collected', at: t0, by: 'courier', note: `${l.qty} ${l.unit || ''} ${l.desc}` });
-  evs.push({ s: 'on_the_way', at: t0 + 1, by: 'courier' });
-  try {
-    await T.update(code, {
-      courierUid: d.courierUid || PRETEND, courierName: d.courierName || trip.courierName || 'Pretend driver', courierPhone: d.courierPhone || '',
-      status: 'on_the_way', demoDrive: true, updatedAt: t0, ...ticks,
-      courierLoc: { lat: trip.origin.lat, lng: trip.origin.lng, acc: 6, heading: null, speed, at: t0 },
-    }, evs);
-  } catch (e) { sims.delete(code); throw e; }
+  const t0 = resume ? setOff - 1 : Date.now();
+  if (!resume) {
+    const open = (d.lines || []).filter(l => !['pending', 'ship'].includes(l.stage));
+    const ticks = {};
+    for (const l of open) if (!(d.collected && d.collected[l.id])) ticks[`collected.${l.id}`] = t0;
+    const evs = [];
+    if (!d.courierUid) evs.push({ s: 'assigned', at: t0, by: 'courier' });
+    for (const l of open) if (!(d.collected && d.collected[l.id])) evs.push({ s: 'collected', at: t0, by: 'courier', note: `${l.qty} ${l.unit || ''} ${l.desc}` });
+    evs.push({ s: 'on_the_way', at: t0 + 1, by: 'courier' });
+    try {
+      await T.update(code, {
+        courierUid: d.courierUid || PRETEND, courierName: d.courierName || trip.courierName || 'Pretend driver', courierPhone: d.courierPhone || '',
+        status: 'on_the_way', demoDrive: true, updatedAt: t0, ...ticks,
+        courierLoc: { lat: trip.origin.lat, lng: trip.origin.lng, acc: 6, heading: null, speed, at: t0 },
+      }, evs);
+    } catch (e) { sims.delete(code); throw e; }
+  }
   const tick = async () => {
     if (!sims.has(code)) return;
     const cur = T.get(code);
