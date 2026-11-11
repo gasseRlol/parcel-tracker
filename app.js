@@ -731,13 +731,15 @@ function orderCourierHtml(d, check, pinForm, shareBlock) {
   const p = progress(d), moving = ['on_the_way', 'problem'].includes(d.status), done = d.status === 'delivered';
   const collecting = !moving && !done && d.status !== 'cancelled';
   const left = p.of - p.got;
+  // Once delivered, the pieces count as on the ship, so the count shows what was handed over
+  const onShip = (d.lines || []).filter(l => l.stage === 'ship').length;
   return `<ol class="checks" aria-label="Delivery checklist">
     ${check(true, false, 'Job taken', d.events ? `You took it ${esc(when((d.events.find(e => e.s === 'assigned') || {}).at || Date.now()))}` : '')}
-    ${check(p.of > 0 && p.got >= p.of, collecting, `Collect the pieces · ${p.got} of ${p.of}`,
-      collecting ? (p.got >= p.of ? 'You have every piece.' : 'Tick each piece when it is in your hands. The customer sees it right away.') : `${p.got} of ${p.of} collected`,
+    ${check(done || (p.of > 0 && p.got >= p.of), collecting, done ? `Collect the pieces · ${onShip} handed over` : `Collect the pieces · ${p.got} of ${p.of}`,
+      collecting ? (p.got >= p.of ? 'You have every piece.' : 'Tick each piece when it is in your hands. The customer sees it right away.') : done ? `${onShip} ${onShip === 1 ? 'piece is' : 'pieces are'} on the ship.` : `${p.got} of ${p.of} collected`,
       collectListHtml(d, collecting))}
     ${check(moving || done, collecting && p.got > 0, 'On my way to the ship',
-      moving ? 'The customer can see you on their map.' : collecting && p.got > 0 ? `Starts sharing your live location.${left > 0 ? ` ${left} ${left === 1 ? 'piece is' : 'pieces are'} not collected yet; they stay for a later trip.` : ''}` : 'Collect at least one piece first.',
+      moving ? 'The customer can see you on their map.' : done ? 'Arrived at the ship.' : collecting && p.got > 0 ? `Starts sharing your live location.${left > 0 ? ` ${left} ${left === 1 ? 'piece is' : 'pieces are'} not collected yet; they stay for a later trip.` : ''}` : 'Collect at least one piece first.',
       `<button class="btn btn-primary" type="button" data-act="start">${ICON.nav}On my way</button><button class="btn" type="button" data-act="start-demo">Start a demo drive</button>`)}
     ${shareBlock ? `<li id="shareSlot">${shareBlock}</li>` : ''}
     ${check(done, moving, 'Delivered', done ? `Done ${d.deliveredAt ? esc(when(ms(d.deliveredAt))) : ''}` : 'Ask the ship for their PIN when you hand it over.', pinForm)}
